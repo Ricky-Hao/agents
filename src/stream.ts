@@ -34,6 +34,7 @@ import {
   LOCAL_CODING_BUNDLE_NAMES,
 } from '@/common';
 import {
+  getAssistantTextPhase,
   getMessageCreationContentMetadata,
   splitAssistantTextContentByPhase,
 } from '@/messages/assistantPhase';
@@ -55,7 +56,10 @@ import {
   calculateMaxToolResultChars,
   truncateToolResultContent,
 } from '@/utils/truncation';
-import { createToolCallsDispatchedEvent, safeDispatchCustomEvent } from '@/utils/events';
+import {
+  createToolCallsDispatchedEvent,
+  safeDispatchCustomEvent,
+} from '@/utils/events';
 import { resolveToolOutcome, outcomeFieldsFromResult } from '@/tools/intentArg';
 import { snapshotValidatedModelChunk } from '@/graphs/acceptedModelResponse';
 import { ProviderTextProtectionError } from '@/protection/providerText';
@@ -1366,7 +1370,8 @@ function startPreparedSubagents(
   if ((graph.clientDelegatedToolNames?.size ?? 0) > 0) return;
   // A parsed string call is not executable even if the same event carries
   // sealed raw fragments. Wait for a separately validated complete call.
-  if (chunk.tool_calls?.some((call) => typeof call.args === 'string') === true) return;
+  if (chunk.tool_calls?.some((call) => typeof call.args === 'string') === true)
+    return;
   if (
     (graph as Partial<StandardGraph>).canPrestartSubagents?.(agentContext) !==
       true ||
@@ -1688,7 +1693,11 @@ export class ChatModelStreamHandler implements t.EventHandler {
       graph.breakerAbort instanceof AbortController
         ? graph.breakerAbort
         : undefined;
-    const entrySignals = [eventBreaker?.signal, graph.signal, graph.config.signal];
+    const entrySignals = [
+      eventBreaker?.signal,
+      graph.signal,
+      graph.config.signal,
+    ];
     /** Immutable scope captured at handler entry. A reset while this
      * handler is suspended in an await replaces the object, so ONE
      * reference comparison proves the event still belongs to the live run
@@ -1698,10 +1707,12 @@ export class ChatModelStreamHandler implements t.EventHandler {
       entryRunScope != null && graph.runScope !== entryRunScope;
     const throwIfRunBreakerTripped = (): void => {
       for (const signal of entrySignals) {
-        if (signal?.aborted === true &&
-            (signal.reason instanceof StreamLimitExceededError ||
-              signal.reason instanceof PreparedSubagentError ||
-              signal.reason instanceof ProviderTextProtectionError)) {
+        if (
+          signal?.aborted === true &&
+          (signal.reason instanceof StreamLimitExceededError ||
+            signal.reason instanceof PreparedSubagentError ||
+            signal.reason instanceof ProviderTextProtectionError)
+        ) {
           throw signal.reason;
         }
         if (signal?.aborted === true && graph.providerTextProtection != null) {
@@ -1923,7 +1934,8 @@ export class ChatModelStreamHandler implements t.EventHandler {
           chunk.response_metadata as Record<string, unknown> | undefined
         );
       const canStreamEager =
-        chunk.tool_calls?.some((call) => typeof call.args === 'string') !== true &&
+        chunk.tool_calls?.some((call) => typeof call.args === 'string') !==
+          true &&
         (allowSequentialSeal || hasExplicitStreamedToolCallSeals(chunk)) &&
         !hasPotentialDirectToolInStreamContext({ graph, agentContext }) &&
         isEagerToolExecutionEnabledForBatch({ graph, metadata, agentContext });
@@ -2286,6 +2298,7 @@ export function createContentAggregator(): t.ContentAggregatorResult {
 
   const contentParts: Array<t.MessageContentComplex | undefined> = [];
   const stepMap = new Map<string, t.RunStep>();
+  const textStepIndex = new Map<string, number>();
   const toolCallContentIndexMap = new Map<string, number>();
   const sourceContentIndexMap = new Map<number, number>();
   const toolStepContentMap = new Map<string, ToolStepContentState>();
@@ -2295,7 +2308,11 @@ export function createContentAggregator(): t.ContentAggregatorResult {
   // Track agentId and groupId for each content index (applied to content parts)
   const contentMetaMap = new Map<
     number,
-    { agentId?: string; groupId?: number }
+    {
+      agentId?: string;
+      groupId?: number;
+      phase?: t.MessageContentComplex['phase'];
+    }
   >();
   /** A delta's content may carry several parts (e.g. Google server-side tool
    *  chunks emit multiple reasoning entries at once); every entry must reach
@@ -2412,12 +2429,17 @@ export function createContentAggregator(): t.ContentAggregatorResult {
     return contentIndex;
   };
   const setContentMeta = (index: number, runStep: t.RunStep): void => {
+    const phase =
+      runStep.stepDetails.type === StepTypes.MESSAGE_CREATION
+        ? runStep.stepDetails.message_creation.phase
+        : undefined;
     const hasAgentId = runStep.agentId != null && runStep.agentId !== '';
     const hasGroupId = runStep.groupId != null;
-    if (!hasAgentId && !hasGroupId) {
+    if (!hasAgentId && !hasGroupId && phase == null) {
       return;
     }
     const existingMeta = contentMetaMap.get(index) ?? {};
+    if (phase != null) existingMeta.phase = phase;
     if (hasAgentId) {
       existingMeta.agentId = runStep.agentId;
     }
@@ -2432,6 +2454,13 @@ export function createContentAggregator(): t.ContentAggregatorResult {
       return;
     }
     const meta = contentMetaMap.get(index);
+    if (
+      meta?.phase != null &&
+      contentPart.type === ContentTypes.TEXT &&
+      getAssistantTextPhase(contentPart) == null
+    ) {
+      contentPart.phase = meta.phase;
+    }
     if (meta?.agentId != null) {
       contentPart.agentId = meta.agentId;
     }
@@ -2479,13 +2508,18 @@ export function createContentAggregator(): t.ContentAggregatorResult {
 
     if (
       partType.startsWith(ContentTypes.TEXT) &&
-      (incomingText !== undefined || incomingCitations !== undefined)
+      (incomingText !== undefined ||
+        incomingCitations !== undefined ||
+        getAssistantTextPhase(contentPart) != null)
     ) {
-      // TODO: update this!!
       const currentContent = contentParts[index] as t.MessageDeltaUpdate;
+      const phase =
+        getAssistantTextPhase(contentPart) ??
+        getAssistantTextPhase(currentContent);
       const update: t.MessageDeltaUpdate = {
         type: ContentTypes.TEXT,
         text: (currentContent.text || '') + (incomingText ?? ''),
+        ...(phase == null ? {} : { phase }),
       };
 
       if (contentPart.tool_call_ids) {
@@ -2676,6 +2710,18 @@ export function createContentAggregator(): t.ContentAggregatorResult {
 
     if (event === GraphEvents.ON_SUMMARIZE_COMPLETE) {
       const completeData = data as t.SummarizeCompleteEvent;
+      if (completeData.error != null) {
+        const step = stepMap.get(completeData.id);
+        if (step != null) {
+          contentParts[step.index] = {
+            type: ContentTypes.SUMMARY,
+            outcome: 'failed',
+            failed: true,
+            content: [],
+          };
+        }
+        return;
+      }
       const summary = completeData.summary;
       if (!summary?.boundary) {
         return;
@@ -2769,7 +2815,20 @@ export function createContentAggregator(): t.ContentAggregatorResult {
       for (const contentPart of getDeltaContentParts(
         messageDelta.delta.content
       )) {
-        updateContent(runStep.index, contentPart);
+        let index = textStepIndex.get(runStep.id) ?? runStep.index;
+        const phase = getAssistantTextPhase(contentPart);
+        const previousPhase =
+          contentParts[index] == null
+            ? undefined
+            : getAssistantTextPhase(contentParts[index]!);
+        if (phase != null && previousPhase != null && phase !== previousPhase) {
+          index = allocateContentIndex();
+          setContentMeta(index, runStep);
+          const meta = contentMetaMap.get(index) ?? {};
+          contentMetaMap.set(index, { ...meta, phase });
+        }
+        textStepIndex.set(runStep.id, index);
+        updateContent(index, contentPart);
       }
     } else if (
       event === GraphEvents.ON_AGENT_UPDATE &&

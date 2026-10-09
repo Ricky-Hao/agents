@@ -688,6 +688,8 @@ export type InjectedMessage = {
   source?: 'skill' | 'hook' | 'system' | 'steer';
   /** Only set when source is 'skill', for compaction preservation */
   skillName?: string;
+  skillId?: string;
+  skillVersion?: number;
 };
 
 /**

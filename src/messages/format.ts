@@ -14,11 +14,6 @@ import type {
 import type { RunnableConfig } from '@langchain/core/runnables';
 import type { ToolCall } from '@langchain/core/messages/tool';
 import type {
-  OrderedToolHistoryProjection,
-  ToolHistoryPreparation,
-  ToolHistoryCallMirrors,
-} from './toolHistoryProjection';
-import type {
   BedrockReasoningContentText,
   ExtendedMessageContent,
   GoogleReasoningContentText,
@@ -38,10 +33,16 @@ import type {
   CompactionSemanticIndexSnapshot,
 } from '@/types';
 import type {
+  OrderedToolHistoryProjection,
+  ToolHistoryPreparation,
+  ToolHistoryCallMirrors,
+} from './toolHistoryProjection';
+import type {
   ProviderMessageAttribution,
   ProviderMessageProvenancePart,
 } from './provenance';
 import type { ProviderToolCallIndex } from './toolResultTypes';
+import type { SkillBody } from './skillCarrier';
 import {
   appendProviderToolCallDescriptor,
   consumeProviderToolResultPair,
@@ -71,6 +72,11 @@ import {
   serializeStructuredValueBounded,
 } from '@/utils/toolContent';
 import {
+  createToolHistoryPreparation,
+  isToolHistoryCallMirror,
+  recordToolHistoryCallMirror,
+} from './toolHistoryProjection';
+import {
   Providers,
   ContentTypes,
   Constants,
@@ -78,15 +84,13 @@ import {
 } from '@/common';
 import { normalizeAnthropicToolCallId } from '@/llm/anthropic/utils/message_inputs';
 import { toLangChainContent, toLangChainMessageFields } from './langchain';
-import { isReasoningContentBlock } from './reasoningTypes';
 import { flattenLegacyContent, isLegacyConvertible } from './content';
 import { HARD_MAX_TOOL_RESULT_CHARS } from '@/utils/truncation';
+import { isMetadataSummaryStub } from '@/summarization/shared';
+import { isReasoningContentBlock } from './reasoningTypes';
+import { getAssistantTextPhase } from './assistantPhase';
+import { buildSkillCarrierText } from './skillCarrier';
 import { emitAgentLog } from '@/utils/events';
-import {
-  createToolHistoryPreparation,
-  isToolHistoryCallMirror,
-  recordToolHistoryCallMirror,
-} from './toolHistoryProjection';
 
 interface MediaMessageParams {
   message: {
@@ -1812,6 +1816,21 @@ function formatAssistantMessage(
           }
         }
       }
+      if (
+        part.type === ContentTypes.TEXT &&
+        currentContent.length > 0 &&
+        getAssistantTextPhase(part) !==
+          getAssistantTextPhase(currentContent[currentContent.length - 1]) &&
+        (getAssistantTextPhase(part) != null ||
+          currentContent.some((item) => getAssistantTextPhase(item) != null))
+      ) {
+        lastAIMessage = appendAIMessage(
+          toLangChainContent(currentContent),
+          currentContentProvenance
+        );
+        currentContent = [];
+        currentContentProvenance = createProviderMessageProvenanceBuilder();
+      }
       if (part.type === ContentTypes.TEXT && part.tool_call_ids) {
         /*
         If there's pending content, it needs to be aggregated as a single string to prepare for tool calls.
@@ -1819,7 +1838,12 @@ function formatAssistantMessage(
         */
         if (currentContent.length > 0) {
           if (
-            currentContent.some((content) => content.type !== ContentTypes.TEXT)
+            currentContent.some(
+              (content) =>
+                content.type !== ContentTypes.TEXT ||
+                getAssistantTextPhase(content) != null
+            ) ||
+            getAssistantTextPhase(part) != null
           ) {
             currentContent.push(part);
             appendCurrentContentProvenance(sourcePartIndices, 'model', true);
@@ -1846,7 +1870,9 @@ function formatAssistantMessage(
         }
         // Create a new AIMessage with this text and prepare for tool calls
         lastAIMessage = appendAIMessage(
-          getTextContent(part),
+          getAssistantTextPhase(part) != null
+            ? toLangChainContent([part])
+            : getTextContent(part),
           createSourceProvenanceBuilder(sourcePartIndices, 'model', true)
         );
       } else if (part.type === ContentTypes.TOOL_CALL) {
@@ -2036,7 +2062,11 @@ function formatAssistantMessage(
         */
         if (currentContent.length > 0) {
           if (
-            currentContent.some((content) => content.type !== ContentTypes.TEXT)
+            currentContent.some(
+              (content) =>
+                content.type !== ContentTypes.TEXT ||
+                getAssistantTextPhase(content) != null
+            )
           ) {
             appendAIMessage(
               toLangChainContent(currentContent),
@@ -2115,7 +2145,10 @@ function formatAssistantMessage(
   if (hasReasoning && currentContent.length > 0) {
     let content = '';
     for (const part of currentContent) {
-      if (part.type !== ContentTypes.TEXT) {
+      if (
+        part.type !== ContentTypes.TEXT ||
+        getAssistantTextPhase(part) != null
+      ) {
         appendAIMessage(
           toLangChainContent(currentContent),
           currentContentProvenance
@@ -2600,6 +2633,9 @@ function scanSummaryBlocks(payload: TPayload): SummaryScan {
       const summaryPart = part as Partial<SummaryContentBlock> & {
         text?: string;
       };
+      if (Array.isArray(summaryPart.content) && summaryPart.boundary == null) {
+        continue;
+      }
 
       // Try content array first (new format), then direct text (legacy format)
       let summaryText = (summaryPart.content ?? [])
@@ -2614,7 +2650,13 @@ function scanSummaryBlocks(payload: TPayload): SummaryScan {
         summaryText = summaryPart.text.trim();
       }
 
-      if (summaryText.length === 0) {
+      if (
+        summaryText.length === 0 ||
+        isMetadataSummaryStub(summaryText) ||
+        summaryPart.failed === true ||
+        summaryPart.summarizing === true ||
+        summaryPart.outcome === 'failed'
+      ) {
         continue;
       }
 
@@ -2805,7 +2847,7 @@ export const formatAgentMessages = (
   /** Pre-resolved skill bodies keyed by skill name. When present, HumanMessages
    *  are reconstructed after skill ToolMessages to restore skill instructions
    *  that were only in LangGraph state during the original run. */
-  skills?: Map<string, string>,
+  skills?: ReadonlyMap<string, SkillBody>,
   options?: FormatAgentMessagesOptions
 ): {
   messages: Array<
@@ -3184,16 +3226,24 @@ export const formatAgentMessages = (
         if (skipSkillBodyNames != null && skipSkillBodyNames.has(skillName)) {
           continue;
         }
-        const body = skills?.get(skillName) ?? '';
+        const resolved = skills?.get(skillName) ?? '';
+        const body = typeof resolved === 'string' ? resolved : resolved.body;
+        const source = {
+          ...(typeof resolved === 'string' ? {} : resolved),
+          skillName,
+          historical: true,
+        };
         if (body) {
           const skillMessage = withMessageRole(
             new HumanMessage({
-              content: body,
+              content: buildSkillCarrierText(body, source),
               additional_kwargs: {
                 role: 'user',
                 isMeta: true,
                 source: 'skill',
                 skillName,
+                skillId: source.skillId,
+                skillVersion: source.skillVersion,
               },
             }),
             'user'
@@ -3675,9 +3725,7 @@ function getSyntheticProviderContextProvenanceParts(
     }
     for (const attribution of source.additionalAttributions ?? []) {
       const sourceMessageId =
-        sourceMessageIds.length === 1
-          ? sourceMessageIds[0]
-          : undefined;
+        sourceMessageIds.length === 1 ? sourceMessageIds[0] : undefined;
       const retainedSourceId =
         retainedSourceIds.size === 1
           ? retainedSourceIds.values().next().value

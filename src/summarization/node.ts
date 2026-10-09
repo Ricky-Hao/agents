@@ -82,7 +82,7 @@ import { executeHooks } from '@/hooks';
 /**
  * Generates a structural metadata summary without making an LLM call.
  * Used as a last-resort fallback when all summarization attempts fail.
- * Preserves tool names and message counts so the agent retains basic context.
+ * Diagnostic only: it cannot replace conversation context.
  */
 function generateMetadataStub(messages: BaseMessage[]): string {
   const counts: Record<string, number> = {};
@@ -485,6 +485,7 @@ function buildSummaryBlock(params: {
 }): t.SummaryContentBlock {
   return {
     type: ContentTypes.SUMMARY,
+    outcome: 'success',
     content: [
       {
         type: ContentTypes.TEXT,
@@ -749,7 +750,10 @@ async function executeSummarizationWithFallback(params: {
      * rejects the run. Rethrown so the summarize node fails the run with
      * the actionable limit error, consistent with agent turns and subagents.
      */
-    if (primaryError instanceof StreamLimitExceededError || primaryError instanceof ProviderTextProtectionError) {
+    if (
+      primaryError instanceof StreamLimitExceededError ||
+      primaryError instanceof ProviderTextProtectionError
+    ) {
       throw primaryError;
     }
     /** A parallel branch's trip aborts the composed summarization signal,
@@ -768,6 +772,7 @@ async function executeSummarizationWithFallback(params: {
       }
     }
 
+    summarizeConfig?.signal?.throwIfAborted();
     const primaryDescribed = describeProviderError(
       primaryError,
       clientConfig.provider,
@@ -820,9 +825,16 @@ async function executeSummarizationWithFallback(params: {
           );
         }
       } catch (fbErr) {
-        const trip = findStreamLimitAbortReason(graph?.getBreakerSignal?.(), summarizeConfig?.signal);
+        const trip = findStreamLimitAbortReason(
+          graph?.getBreakerSignal?.(),
+          summarizeConfig?.signal
+        );
         if (trip != null) throw trip;
-        if (fbErr instanceof StreamLimitExceededError || fbErr instanceof ProviderTextProtectionError) {
+        summarizeConfig?.signal?.throwIfAborted();
+        if (
+          fbErr instanceof StreamLimitExceededError ||
+          fbErr instanceof ProviderTextProtectionError
+        ) {
           throw fbErr;
         }
         const fbDescribed = describeFallbackError(fbErr, fallbacks);
@@ -845,7 +857,10 @@ async function executeSummarizationWithFallback(params: {
     }
   }
 
-  const trip = findStreamLimitAbortReason(graph?.getBreakerSignal?.(), summarizeConfig?.signal);
+  const trip = findStreamLimitAbortReason(
+    graph?.getBreakerSignal?.(),
+    summarizeConfig?.signal
+  );
   if (trip != null) throw trip;
   return { text: summaryText, usage: summaryUsage, usedMetadataStub };
 }
@@ -881,7 +896,10 @@ async function dispatchCompletionEvents(params: {
   } = params;
 
   const assertNotTripped = (): void => {
-    const trip = findStreamLimitAbortReason(graph.getBreakerSignal?.(), runnableConfig?.signal);
+    const trip = findStreamLimitAbortReason(
+      graph.getBreakerSignal?.(),
+      runnableConfig?.signal
+    );
     if (trip != null) throw trip;
   };
   assertNotTripped();
@@ -1033,7 +1051,8 @@ function findStreamLimitAbortReason(
   for (const signal of signals) {
     if (
       signal?.aborted === true &&
-      (signal.reason instanceof StreamLimitExceededError || signal.reason instanceof ProviderTextProtectionError)
+      (signal.reason instanceof StreamLimitExceededError ||
+        signal.reason instanceof ProviderTextProtectionError)
     ) {
       return signal.reason;
     }
@@ -1458,18 +1477,11 @@ export function createSummarizeNode({
     /**
      * The metadata stub describes the history rather than summarizing it, so
      * committing it means removing the head and keeping nothing of what it
-     * said. That trade is never worth making to paper over an overflow, and
-     * never for a manual compaction, which would replace the whole history
-     * with a message count: the recovery would "succeed" only by destroying
-     * the conversation it was supposed to preserve. Leave state untouched
-     * and let the provider error surface instead.
+     * said. No trigger may replace conversation history with this diagnostic.
+     * Leave the valid checkpoint and message history untouched and record a
+     * bounded failed attempt.
      */
-    if (
-      usedMetadataStub === true &&
-      (request.reason === 'overflow' ||
-        request.reason === 'manual' ||
-        usedIntraTurnFallback)
-    ) {
+    if (usedMetadataStub === true) {
       const preservationReason =
         PRESERVATION_REASONS[request.reason ?? 'trigger'] ??
         'intra-turn compaction';
@@ -1484,14 +1496,7 @@ export function createSummarizeNode({
        * consumers tracking step lifecycle keep an unfinished placeholder for
        * the rest of the run.
        */
-      await graph.dispatchRunStepCompleted(
-        stepId,
-        {
-          type: 'summary',
-          summary: placeholderSummary,
-        } satisfies t.SummaryCompleted,
-        runnableConfig
-      );
+      await graph.closeRunStep?.(stepId, 'failed', runnableConfig);
       if (runnableConfig) {
         await safeDispatchCustomEvent(
           GraphEvents.ON_SUMMARIZE_COMPLETE,
@@ -1506,7 +1511,7 @@ export function createSummarizeNode({
       return { summarizationRequest: undefined };
     }
 
-    if (!rawText) {
+    if (!rawText.trim() || summarizeConfig?.signal?.aborted === true) {
       /**
        * An empty summary compacts nothing, so the state the pruner sees next
        * is byte-identical to the one that just triggered. Resetting the guard
@@ -1538,7 +1543,10 @@ export function createSummarizeNode({
       return { summarizationRequest: undefined };
     }
 
-    const postCallTrip = findStreamLimitAbortReason(entryBreakerSignal, config?.signal);
+    const postCallTrip = findStreamLimitAbortReason(
+      entryBreakerSignal,
+      config?.signal
+    );
     if (postCallTrip != null) throw postCallTrip;
     const summaryText = enrichSummary(rawText, messagesToRefine);
 
@@ -1547,7 +1555,10 @@ export function createSummarizeNode({
       agentContext
     );
 
-    const commitTrip = findStreamLimitAbortReason(entryBreakerSignal, config?.signal);
+    const commitTrip = findStreamLimitAbortReason(
+      entryBreakerSignal,
+      config?.signal
+    );
     if (commitTrip != null) throw commitTrip;
     if (usedIntraTurnFallback) {
       agentContext.setSummary(summaryText, tokenCount, {
@@ -1728,7 +1739,10 @@ export function createSummarizationChunkHandler({
         throw error;
       }
     }
-    const protectionTrip = findStreamLimitAbortReason(graph?.getBreakerController?.().signal, config.signal);
+    const protectionTrip = findStreamLimitAbortReason(
+      graph?.getBreakerController?.().signal,
+      config.signal
+    );
     if (protectionTrip != null) throw protectionTrip;
     const chunkAny = chunk as Parameters<typeof getChunkContent>[0]['chunk'];
     const raw = getChunkContent({ chunk: chunkAny, provider, reasoningKey });

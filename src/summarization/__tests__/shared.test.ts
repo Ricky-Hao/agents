@@ -15,7 +15,8 @@ describe('summarization primitives', () => {
       expect(
         carrier.startsWith('<summary>\ncheckpoint body\n</summary>\n\n')
       ).toBe(true);
-      expect(carrier).toContain('This is your own checkpoint');
+      expect(carrier).toContain('This is a generated summary');
+      expect(carrier).not.toContain('you wrote');
     });
 
     /** A stored summary is budgeted for by measuring this, so the wrapper has
