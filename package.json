@@ -1,6 +1,6 @@
 {
   "name": "@librechat/agents",
-  "version": "4.0.4",
+  "version": "4.0.4-ricky.1",
   "reova": {
     "enabled": true,
     "endpoint": "https://telemetry.reo.dev/data"
@@ -178,6 +178,8 @@
     "src/**/*.ts",
     "!src/**/*.test.ts",
     "!src/**/*.spec.ts",
+    "!src/**/test.ts",
+    "!dist/**/test.d.ts",
     "!src/**/__tests__/**",
     "!src/specs/**",
     "!src/scripts/**",

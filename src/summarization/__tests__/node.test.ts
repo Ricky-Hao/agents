@@ -567,7 +567,7 @@ describe('createSummarizeNode', () => {
     );
   });
 
-  it('produces metadata stub when all LLM attempts fail', async () => {
+  it('preserves history when all LLM attempts fail', async () => {
     const events = captureEvents();
 
     jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
@@ -608,24 +608,17 @@ describe('createSummarizeNode', () => {
     );
 
     expect(result.summarizationRequest).toBeUndefined();
-    // After summarization, REMOVE_ALL + surviving context is returned
-    expect(result.messages).toBeDefined();
-    expect(result.messages!.length).toBeGreaterThanOrEqual(1);
-    expect(result.messages![0]._getType()).toBe('remove');
-
-    // Tier 3 fallback: metadata stub is used as summary text
+    expect(result.messages).toBeUndefined();
+    expect(setSummary).not.toHaveBeenCalled();
     const completeEvent = events.find(
       (e) => e.event === GraphEvents.ON_SUMMARIZE_COMPLETE
     );
     expect(
-      (
-        (completeEvent?.data as t.SummarizeCompleteEvent).summary!
-          .content?.[0] as { text: string } | undefined
-      )?.text
-    ).toMatch(/^\[Metadata summary:/);
-    expect(
-      (completeEvent?.data as t.SummarizeCompleteEvent).error
+      (completeEvent?.data as t.SummarizeCompleteEvent).summary
     ).toBeUndefined();
+    expect((completeEvent?.data as t.SummarizeCompleteEvent).error).toContain(
+      'history was preserved'
+    );
   });
 
   it('catches model initialization errors and falls back to metadata stub', async () => {
@@ -664,10 +657,7 @@ describe('createSummarizeNode', () => {
       )
     ).resolves.not.toThrow();
 
-    expect(setSummary).toHaveBeenCalledWith(
-      expect.stringContaining('[Metadata summary:'),
-      expect.any(Number)
-    );
+    expect(setSummary).not.toHaveBeenCalled();
   });
 
   it('falls back to metadata stub when primary LLM call fails', async () => {
@@ -703,10 +693,7 @@ describe('createSummarizeNode', () => {
       {} as RunnableConfig
     );
 
-    expect(setSummary).toHaveBeenCalledWith(
-      expect.stringContaining('[Metadata summary:'),
-      expect.any(Number)
-    );
+    expect(setSummary).not.toHaveBeenCalled();
   });
 
   it('calls setSummary with the final text', async () => {
@@ -2029,41 +2016,100 @@ describe('createSummarizeNode — overflow recovery', () => {
     expect(result.messages).toBeUndefined();
   });
 
-  it('still commits a stub for a configured trigger, preserving prior behavior', async () => {
-    jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
-      class {
-        constructor() {
-          return {
-            invoke: (): never => {
-              throw new Error('upstream unavailable');
-            },
-            stream: (): never => {
-              throw new Error('upstream unavailable');
-            },
-          };
-        }
-      } as never
-    );
-    const agentContext = createAgentContext();
-    const graph = mockGraph(() => {});
-    const node = createSummarizeNode({ agentContext, graph, generateStepId });
+  it.each(['trigger', 'overflow', 'manual'] as const)(
+    'preserves the existing summary and boundary for a %s failure',
+    async (reason) => {
+      jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
+        class {
+          constructor() {
+            return {
+              invoke: (): never => {
+                throw new Error('upstream unavailable');
+              },
+              stream: (): never => {
+                throw new Error('upstream unavailable');
+              },
+            };
+          }
+        } as never
+      );
+      const agentContext = createAgentContext();
+      agentContext.setSummary('Valid existing summary', 10);
+      const graph = mockGraph(() => {});
+      const node = createSummarizeNode({ agentContext, graph, generateStepId });
 
-    await node(
-      {
-        messages: [new HumanMessage('Hello'), new HumanMessage('World')],
-        summarizationRequest: {
-          remainingContextTokens: 0,
-          agentId: 'agent_0',
+      const result = await node(
+        {
+          messages: [new HumanMessage('Hello'), new HumanMessage('World')],
+          summarizationRequest: {
+            remainingContextTokens: 0,
+            agentId: 'agent_0',
+            reason,
+            allowSummarization: true,
+          },
         },
-      },
-      {} as RunnableConfig
-    );
+        {} as RunnableConfig
+      );
 
-    expect(agentContext.hasSummary()).toBe(true);
-  });
+      expect(agentContext.hasSummary()).toBe(true);
+      expect(agentContext.getSummaryText()).toBe('Valid existing summary');
+      expect(result.messages).toBeUndefined();
+      expect(agentContext.summaryVersion).toBe(1);
+    }
+  );
 });
 
 describe('createSummarizeNode — empty summarizer output', () => {
+  it('preserves a tool-heavy intra-turn history and its previous checkpoint on failure', async () => {
+    const invoke = jest.fn().mockRejectedValue(new Error('prompt is too long'));
+    jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
+      class {
+        constructor() {
+          return { invoke };
+        }
+      } as never
+    );
+    const agentContext = createAgentContext({
+      summarizationConfig: { retainRecent: { turns: 2, tokens: 100 } },
+      tokenCounter: () => 100,
+    });
+    agentContext.setSummary('Existing checkpoint', 10);
+    const messages = [
+      new HumanMessage('Task'),
+      new AIMessage({
+        content: '',
+        tool_calls: [{ id: 'one', name: 'lookup', args: {} }],
+      }),
+      new ToolMessage({ content: 'First result', tool_call_id: 'one' }),
+      new AIMessage({
+        content: '',
+        tool_calls: [{ id: 'two', name: 'lookup', args: {} }],
+      }),
+      new ToolMessage({ content: 'Second result', tool_call_id: 'two' }),
+      new AIMessage('Continuing'),
+    ];
+    const node = createSummarizeNode({
+      agentContext,
+      graph: mockGraph(),
+      generateStepId,
+    });
+    const result = await node(
+      {
+        messages,
+        summarizationRequest: {
+          remainingContextTokens: 0,
+          agentId: 'agent_0',
+          reason: 'trigger',
+        },
+      },
+      {}
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(result.messages).toBeUndefined();
+    expect(agentContext.getSummaryText()).toBe('Existing checkpoint');
+    expect(agentContext.summaryVersion).toBe(1);
+  });
+
   /** Model whose response carries no text — the shape a reasoning-only
    *  completion produces once `extractResponseText` drops thinking blocks. */
   function mockReasoningOnlyModel(): { invoke: jest.Mock } {
@@ -2362,116 +2408,170 @@ describe('summarize node breaker capture', () => {
   });
 
   it.each([
-    { label: 'stream limit', trip: new StreamLimitExceededError({ kind: 'tool_call_args', limit: 10, observed: 11, toolName: 'db_query' }) },
+    {
+      label: 'stream limit',
+      trip: new StreamLimitExceededError({
+        kind: 'tool_call_args',
+        limit: 10,
+        observed: 11,
+        toolName: 'db_query',
+      }),
+    },
     { label: 'protection', trip: new ProviderTextProtectionError('blocked') },
-  ])('rethrows a parent trip on the config signal instead of degrading to the stub ($label)', async ({ trip }) => {
-    /** Child graph's own breaker stays live: in a subagent, a ROOT
-     * sibling's trip arrives only through the composed invocation signal. */
-    const childBreaker = new AbortController();
-    const configAbort = new AbortController();
-    captureEvents();
-    jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
-      class {
-        constructor() {
-          return {
-            invoke: jest.fn().mockImplementation(async () => {
-              configAbort.abort(trip);
-              throw new Error('The operation was aborted');
-            }),
-          };
-        }
-      } as never
-    );
-
-    const agentContext = createAgentContext();
-    const graph = {
-      ...mockGraph(),
-      getBreakerSignal: (): AbortSignal => childBreaker.signal,
-    };
-    const node = createSummarizeNode({
-      agentContext,
-      graph,
-      generateStepId,
-    });
-
-    await expect(
-      node(
-        {
-          messages: [new HumanMessage('Hello'), new HumanMessage('World')],
-          summarizationRequest: {
-            remainingContextTokens: 1000,
-            agentId: 'agent_0',
-          },
-        },
-        { signal: configAbort.signal } as RunnableConfig
-      )
-    ).rejects.toBe(trip);
-  });
-
-  it.each([
-    { label: 'stream limit', trip: new StreamLimitExceededError({ kind: 'tool_call_args', limit: 10, observed: 11, toolName: 'db_query' }) },
-    { label: 'protection', trip: new ProviderTextProtectionError('blocked') },
-  ])('rejects at entry when the breaker has already tripped ($label)', async ({ trip }) => {
-    const entryBreaker = new AbortController();
-    entryBreaker.abort(trip);
-
-    const modelClassSpy = jest
-      .spyOn(providers, 'getChatModelClass')
-      .mockReturnValue(
+  ])(
+    'rethrows a parent trip on the config signal instead of degrading to the stub ($label)',
+    async ({ trip }) => {
+      /** Child graph's own breaker stays live: in a subagent, a ROOT
+       * sibling's trip arrives only through the composed invocation signal. */
+      const childBreaker = new AbortController();
+      const configAbort = new AbortController();
+      captureEvents();
+      jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
         class {
           constructor() {
-            return mockInvokeModel('should never run');
+            return {
+              invoke: jest.fn().mockImplementation(async () => {
+                configAbort.abort(trip);
+                throw new Error('The operation was aborted');
+              }),
+            };
           }
         } as never
       );
 
-    const agentContext = createAgentContext();
-    const graph = {
-      ...mockGraph(),
-      getBreakerSignal: (): AbortSignal => entryBreaker.signal,
-    };
-    const node = createSummarizeNode({
-      agentContext,
-      graph,
-      generateStepId,
-    });
+      const agentContext = createAgentContext();
+      const graph = {
+        ...mockGraph(),
+        getBreakerSignal: (): AbortSignal => childBreaker.signal,
+      };
+      const node = createSummarizeNode({
+        agentContext,
+        graph,
+        generateStepId,
+      });
 
-    await expect(
-      node(
-        {
-          messages: [new HumanMessage('Hello'), new HumanMessage('World')],
-          summarizationRequest: {
-            remainingContextTokens: 1000,
-            agentId: 'agent_0',
+      await expect(
+        node(
+          {
+            messages: [new HumanMessage('Hello'), new HumanMessage('World')],
+            summarizationRequest: {
+              remainingContextTokens: 1000,
+              agentId: 'agent_0',
+            },
           },
+          { signal: configAbort.signal } as RunnableConfig
+        )
+      ).rejects.toBe(trip);
+    }
+  );
+
+  it.each([
+    {
+      label: 'stream limit',
+      trip: new StreamLimitExceededError({
+        kind: 'tool_call_args',
+        limit: 10,
+        observed: 11,
+        toolName: 'db_query',
+      }),
+    },
+    { label: 'protection', trip: new ProviderTextProtectionError('blocked') },
+  ])(
+    'rejects at entry when the breaker has already tripped ($label)',
+    async ({ trip }) => {
+      const entryBreaker = new AbortController();
+      entryBreaker.abort(trip);
+
+      const modelClassSpy = jest
+        .spyOn(providers, 'getChatModelClass')
+        .mockReturnValue(
+          class {
+            constructor() {
+              return mockInvokeModel('should never run');
+            }
+          } as never
+        );
+
+      const agentContext = createAgentContext();
+      const graph = {
+        ...mockGraph(),
+        getBreakerSignal: (): AbortSignal => entryBreaker.signal,
+      };
+      const node = createSummarizeNode({
+        agentContext,
+        graph,
+        generateStepId,
+      });
+
+      await expect(
+        node(
+          {
+            messages: [new HumanMessage('Hello'), new HumanMessage('World')],
+            summarizationRequest: {
+              remainingContextTokens: 1000,
+              agentId: 'agent_0',
+            },
+          },
+          {} as RunnableConfig
+        )
+      ).rejects.toBe(trip);
+
+      expect(graph.contentData).toHaveLength(0);
+      expect(modelClassSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['reject', 'return'] as const)(
+    'does not fallback, complete or commit a summary after an inherited protection trip (%s)',
+    async (mode) => {
+      const trip = new ProviderTextProtectionError('blocked');
+      const parent = new AbortController();
+      const events = captureEvents();
+      const invoke = jest.fn(async () => {
+        parent.abort(trip);
+        if (mode === 'reject') throw new Error('Generic provider abort');
+        return new AIMessage('Late summary');
+      });
+      jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
+        class {
+          constructor() {
+            return { invoke };
+          }
+        } as never
+      );
+      const context = createAgentContext();
+      const complete = jest.fn();
+      const node = createSummarizeNode({
+        agentContext: context,
+        graph: {
+          ...mockGraph(complete),
+          getBreakerSignal: () => new AbortController().signal,
         },
-        {} as RunnableConfig
-      )
-    ).rejects.toBe(trip);
-
-    expect(graph.contentData).toHaveLength(0);
-    expect(modelClassSpy).not.toHaveBeenCalled();
-  });
-
-  it.each(['reject', 'return'] as const)('does not fallback, complete or commit a summary after an inherited protection trip (%s)', async (mode) => {
-    const trip = new ProviderTextProtectionError('blocked');
-    const parent = new AbortController();
-    const events = captureEvents();
-    const invoke = jest.fn(async () => {
-      parent.abort(trip);
-      if (mode === 'reject') throw new Error('Generic provider abort');
-      return new AIMessage('Late summary');
-    });
-    jest.spyOn(providers, 'getChatModelClass').mockReturnValue(class { constructor() { return { invoke }; } } as never);
-    const context = createAgentContext();
-    const complete = jest.fn();
-    const node = createSummarizeNode({ agentContext: context, graph: { ...mockGraph(complete), getBreakerSignal: () => new AbortController().signal }, generateStepId });
-    await expect(node({ messages: [new HumanMessage('Hello'), new AIMessage('World')], summarizationRequest: { remainingContextTokens: 1000, agentId: 'agent_0', reason: 'trigger' } }, { signal: parent.signal })).rejects.toBe(trip);
-    expect(context.hasSummary()).toBe(false);
-    expect(complete).not.toHaveBeenCalled();
-    expect(events.some((entry) => entry.event === GraphEvents.ON_SUMMARIZE_COMPLETE)).toBe(false);
-    expect(invoke).toHaveBeenCalledTimes(1);
-  });
+        generateStepId,
+      });
+      await expect(
+        node(
+          {
+            messages: [new HumanMessage('Hello'), new AIMessage('World')],
+            summarizationRequest: {
+              remainingContextTokens: 1000,
+              agentId: 'agent_0',
+              reason: 'trigger',
+            },
+          },
+          { signal: parent.signal }
+        )
+      ).rejects.toBe(trip);
+      expect(context.hasSummary()).toBe(false);
+      expect(complete).not.toHaveBeenCalled();
+      expect(
+        events.some(
+          (entry) => entry.event === GraphEvents.ON_SUMMARIZE_COMPLETE
+        )
+      ).toBe(false);
+      expect(invoke).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it('rethrows an inherited protection trip from the fallback instead of committing a periodic stub', async () => {
     const trip = new ProviderTextProtectionError('blocked');
@@ -2483,17 +2583,48 @@ describe('summarize node breaker capture', () => {
       parent.abort(trip);
       throw new Error('Fallback provider aborted');
     });
-    jest.spyOn(providers, 'getChatModelClass').mockReturnValue(class { constructor() { return { invoke }; } } as never);
+    jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
+      class {
+        constructor() {
+          return { invoke };
+        }
+      } as never
+    );
     const context = createAgentContext();
-    const clientOptions = { model: 'summary-test', ...context.clientOptions, fallbacks: [{ provider: Providers.OPENAI, clientOptions: {} }] };
+    const clientOptions = {
+      model: 'summary-test',
+      ...context.clientOptions,
+      fallbacks: [{ provider: Providers.OPENAI, clientOptions: {} }],
+    };
     context.clientOptions = clientOptions;
     const complete = jest.fn();
-    const node = createSummarizeNode({ agentContext: context, graph: { ...mockGraph(complete), getBreakerSignal: () => new AbortController().signal }, generateStepId });
-    await expect(node({ messages: [new HumanMessage('Hello'), new AIMessage('World')], summarizationRequest: { remainingContextTokens: 1000, agentId: 'agent_0', reason: 'trigger' } }, { signal: parent.signal })).rejects.toBe(trip);
+    const node = createSummarizeNode({
+      agentContext: context,
+      graph: {
+        ...mockGraph(complete),
+        getBreakerSignal: () => new AbortController().signal,
+      },
+      generateStepId,
+    });
+    await expect(
+      node(
+        {
+          messages: [new HumanMessage('Hello'), new AIMessage('World')],
+          summarizationRequest: {
+            remainingContextTokens: 1000,
+            agentId: 'agent_0',
+            reason: 'trigger',
+          },
+        },
+        { signal: parent.signal }
+      )
+    ).rejects.toBe(trip);
     expect(calls).toBe(2);
     expect(context.hasSummary()).toBe(false);
     expect(complete).not.toHaveBeenCalled();
-    expect(events.some((entry) => entry.event === GraphEvents.ON_SUMMARIZE_COMPLETE)).toBe(false);
+    expect(
+      events.some((entry) => entry.event === GraphEvents.ON_SUMMARIZE_COMPLETE)
+    ).toBe(false);
   });
 
   it('binds the model call to the breaker signal read at node entry', async () => {

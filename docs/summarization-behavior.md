@@ -96,7 +96,7 @@ After compaction, the message array is empty. On the next agent node turn:
 
 Raw conversation messages are sent to the LLM via `attemptInvoke` with the summarization instruction appended as the final HumanMessage. Tools are bound so providers that require tool definitions (e.g. Bedrock) accept the messages and cache-capable providers can reuse the tool-schema prefix. The summarization model does not currently pass through `AgentContext.systemRunnable`, so exact replay of the main request's full system + tools + messages prefix is not guaranteed.
 
-If the primary call fails, fallback providers are attempted (via `tryFallbackProviders`). If all providers fail, a metadata stub is generated mechanically — no LLM call, just tool names and message counts.
+If the primary call fails, configured fallback providers are attempted (via `tryFallbackProviders`). If all providers fail, the diagnostic metadata stub is never committed as a summary, for any trigger. Existing summary state and history remain intact; the failure guard bounds subsequent attempts. Empty output and interrupted attempts likewise cannot advance the compaction boundary. Summary carriers identify generated context without claiming the current model authored it; prompts preserve uncertainty about tool results and truncation.
 
 ### Summarization Prompt
 
