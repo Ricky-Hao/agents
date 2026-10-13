@@ -1,5 +1,6 @@
 // src/tools/ProgrammaticToolCalling.ts
 import { config } from 'dotenv';
+import { normalizeProgrammaticToolResponse } from './response';
 import { randomUUID } from 'node:crypto';
 import fetch, { RequestInit } from 'node-fetch';
 import { tool, DynamicStructuredTool } from '@langchain/core/tools';
@@ -634,123 +635,7 @@ export function unwrapToolResponse(
   result: unknown,
   isMCPTool: boolean
 ): unknown {
-  // Only unwrap if this is an MCP tool and result is a tuple
-  if (!isMCPTool) {
-    return result;
-  }
-
-  /**
-   * Checks if a value is a content block object (has type and text).
-   */
-  const isContentBlock = (value: unknown): boolean => {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      return false;
-    }
-    const obj = value as Record<string, unknown>;
-    return typeof obj.type === 'string';
-  };
-
-  /**
-   * Checks if an array is an array of content blocks.
-   */
-  const isContentBlockArray = (arr: unknown[]): boolean => {
-    return arr.length > 0 && arr.every(isContentBlock);
-  };
-
-  /**
-   * Extracts text from a single content block object.
-   * Returns the text if it's a text block, otherwise returns null.
-   */
-  const extractTextFromBlock = (block: unknown): string | null => {
-    if (typeof block !== 'object' || block === null) return null;
-    const b = block as Record<string, unknown>;
-    if (b.type === 'text' && typeof b.text === 'string') {
-      return b.text;
-    }
-    return null;
-  };
-
-  /**
-   * Extracts text from content blocks (array or single object).
-   * Returns combined text or null if no text blocks found.
-   */
-  const extractTextFromContent = (content: unknown): string | null => {
-    // Single content block object: { type: 'text', text: '...' }
-    if (
-      typeof content === 'object' &&
-      content !== null &&
-      !Array.isArray(content)
-    ) {
-      const text = extractTextFromBlock(content);
-      if (text !== null) return text;
-    }
-
-    // Array of content blocks: [{ type: 'text', text: '...' }, ...]
-    if (Array.isArray(content) && content.length > 0) {
-      const texts = content
-        .map(extractTextFromBlock)
-        .filter((t): t is string => t !== null);
-      if (texts.length > 0) {
-        return texts.join('\n');
-      }
-    }
-
-    return null;
-  };
-
-  /**
-   * Tries to parse a string as JSON if it looks like JSON.
-   */
-  const maybeParseJSON = (str: string): unknown => {
-    const trimmed = str.trim();
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        return str;
-      }
-    }
-    return str;
-  };
-
-  // Handle array of content blocks at top level FIRST
-  // (before checking for tuple, since both are arrays)
-  if (Array.isArray(result) && isContentBlockArray(result)) {
-    const extractedText = extractTextFromContent(result);
-    if (extractedText !== null) {
-      return maybeParseJSON(extractedText);
-    }
-  }
-
-  // Check if result is a tuple/array with [content, artifacts]
-  if (Array.isArray(result) && result.length >= 1) {
-    const [content] = result;
-
-    // If first element is a string, return it (possibly parsed as JSON)
-    if (typeof content === 'string') {
-      return maybeParseJSON(content);
-    }
-
-    // Try to extract text from content blocks
-    const extractedText = extractTextFromContent(content);
-    if (extractedText !== null) {
-      return maybeParseJSON(extractedText);
-    }
-
-    // If first element is an object (but not a text block), return it
-    if (typeof content === 'object' && content !== null) {
-      return content;
-    }
-  }
-
-  // Handle single content block object at top level (not in tuple)
-  const extractedText = extractTextFromContent(result);
-  if (extractedText !== null) {
-    return maybeParseJSON(extractedText);
-  }
-
-  // Not a formatted response, return as-is
-  return result;
+  return normalizeProgrammaticToolResponse(result, isMCPTool).result;
 }
 
 function normalizeToolInput(
@@ -835,12 +720,9 @@ export async function executeTools(
       );
 
       const isMCPTool = tool.mcp === true;
-      const unwrappedResult = unwrapToolResponse(result, isMCPTool);
-
       return {
         call_id: call.id,
-        result: unwrappedResult,
-        is_error: false,
+        ...normalizeProgrammaticToolResponse(result, isMCPTool),
       };
     } catch (error) {
       return {

@@ -703,15 +703,13 @@ describe('ProgrammaticToolCalling', () => {
         );
       });
 
-      it('filters out non-text blocks', () => {
+      it('preserves mixed rich content without dropping non-text blocks', () => {
         const result = [
           { type: 'text', text: 'Text content' },
           { type: 'image', data: 'base64...' },
           { type: 'text', text: 'More text' },
         ];
-        expect(unwrapToolResponse(result, true)).toBe(
-          'Text content\nMore text'
-        );
+        expect(unwrapToolResponse(result, true)).toBe(result);
       });
     });
 
