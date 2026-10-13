@@ -19,6 +19,7 @@
  * parameter it did not declare.
  */
 
+import { types } from 'node:util';
 import type { JsonSchemaType, OutcomePatch } from '@/types';
 
 /** Argument carrying the model-authored label for a tool call. */
@@ -199,6 +200,194 @@ export function stripIntent(args: unknown): unknown {
   const { [INTENT_ARG]: _omit, ...rest } = obj;
   return rest;
 }
+
+const SCHEMA_INSPECTION_ERROR =
+  'Tool input schema could not be inspected safely.';
+/** Introspection bounds, not execution limits: uncertainty preserves arguments. */
+const MAX_SCHEMA_NODES = 128;
+const MAX_SCHEMA_DEPTH = 16;
+
+function isInspectable(value: unknown): value is object {
+  return (
+    value != null && (typeof value === 'object' || typeof value === 'function')
+  );
+}
+
+/** Data descriptors avoid executing schema getters or iterable hooks. */
+function schemaProperty(
+  value: unknown,
+  key: PropertyKey,
+  allowToolProxy = false
+): unknown {
+  if (!isInspectable(value)) return undefined;
+  let current: object | null = value;
+  for (let depth = 0; current != null && depth < MAX_SCHEMA_DEPTH; depth++) {
+    if (types.isProxy(current) && !(allowToolProxy && current === value)) {
+      throw new Error(SCHEMA_INSPECTION_ERROR);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(current, key);
+    if (descriptor != null) {
+      if (!('value' in descriptor)) throw new Error(SCHEMA_INSPECTION_ERROR);
+      return descriptor.value;
+    }
+    current = Object.getPrototypeOf(current);
+  }
+  if (current != null) throw new Error(SCHEMA_INSPECTION_ERROR);
+  return undefined;
+}
+
+function schemaArray(value: unknown): unknown[] {
+  if (value == null) return [];
+  if (!Array.isArray(value) || types.isProxy(value))
+    throw new Error(SCHEMA_INSPECTION_ERROR);
+  if (
+    schemaProperty(value, Symbol.iterator) !== Array.prototype[Symbol.iterator]
+  ) {
+    throw new Error(SCHEMA_INSPECTION_ERROR);
+  }
+  const length = schemaProperty(value, 'length');
+  if (typeof length !== 'number' || length > MAX_SCHEMA_NODES) {
+    throw new Error(SCHEMA_INSPECTION_ERROR);
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index++) {
+    entries.push(schemaProperty(value, String(index)));
+  }
+  return entries;
+}
+
+/** Zod stores its object shape lazily; only this necessary evaluation may run schema code. */
+function zodShape(schema: object, definition: unknown, type: unknown): unknown {
+  if (type === 'ZodObject') {
+    const shape = schemaProperty(definition, 'shape');
+    if (typeof shape !== 'function' || types.isProxy(shape)) {
+      throw new Error(SCHEMA_INSPECTION_ERROR);
+    }
+    return Reflect.apply(shape, definition, []);
+  }
+  const zod = schemaProperty(schema, '_zod');
+  if (
+    type === 'object' &&
+    isInspectable(definition) &&
+    schemaProperty(zod, 'def') === definition
+  ) {
+    const descriptor = Object.getOwnPropertyDescriptor(definition, 'shape');
+    if (descriptor?.get != null && !types.isProxy(descriptor.get)) {
+      return Reflect.apply(descriptor.get, definition, []);
+    }
+    return schemaProperty(definition, 'shape');
+  }
+  return schemaProperty(schema, 'shape');
+}
+
+/** Shared by normalization and intent cleanup; never substitutes a model-facing schema. */
+export function inspectToolInputSchema(tool: { schema?: unknown }): {
+  object: boolean;
+  string: boolean;
+  intent: 'declared' | 'absent' | 'unknown';
+} {
+  const result = {
+    object: false,
+    string: false,
+    intent: 'absent' as 'declared' | 'absent' | 'unknown',
+  };
+  const seen = new Set<object>();
+  const active = new Set<object>();
+  const inspect = (value: unknown, depth = 0): void => {
+    if (!isInspectable(value)) return;
+    if (
+      active.has(value) ||
+      depth > MAX_SCHEMA_DEPTH ||
+      seen.size >= MAX_SCHEMA_NODES
+    ) {
+      result.intent = 'unknown';
+      result.string = true;
+      return;
+    }
+    if (seen.has(value)) return;
+    seen.add(value);
+    active.add(value);
+    const type = schemaProperty(value, 'type');
+    const schemaTypes = typeof type === 'string' ? [type] : schemaArray(type);
+    const definition = schemaProperty(value, '_def');
+    const zodType =
+      schemaProperty(definition, 'typeName') ??
+      schemaProperty(definition, 'type');
+    result.object ||=
+      schemaTypes.includes('object') ||
+      zodType === 'ZodObject' ||
+      zodType === 'object';
+    result.string ||=
+      schemaTypes.includes('string') ||
+      zodType === 'ZodString' ||
+      zodType === 'string';
+    if (
+      schemaProperty(value, '$ref') != null ||
+      schemaProperty(value, '$dynamicRef') != null
+    ) {
+      result.intent = 'unknown';
+      // An opaque alternative may accept prose; a root object constraint still rules that out.
+      result.string = true;
+    }
+    const shape =
+      schemaProperty(value, 'properties') ??
+      zodShape(value, definition, zodType);
+    if (isInspectable(shape)) {
+      if (types.isProxy(shape)) throw new Error(SCHEMA_INSPECTION_ERROR);
+      if (
+        Object.getOwnPropertyDescriptor(shape, INTENT_ARG) != null &&
+        result.intent !== 'unknown'
+      ) {
+        result.intent = 'declared';
+      }
+    }
+    inspect(
+      schemaProperty(definition, 'innerType') ??
+        schemaProperty(definition, 'schema'),
+      depth + 1
+    );
+    for (const key of ['anyOf', 'oneOf', 'allOf']) {
+      for (const option of schemaArray(schemaProperty(value, key)))
+        inspect(option, depth + 1);
+    }
+    for (const option of schemaArray(schemaProperty(definition, 'options'))) {
+      inspect(option, depth + 1);
+    }
+    active.delete(value);
+  };
+  try {
+    const constructor = schemaProperty(tool, 'constructor', true);
+    if (schemaProperty(constructor, 'name') === 'DynamicTool') {
+      return { object: false, string: true, intent: 'unknown' };
+    }
+    const schema = schemaProperty(tool, 'schema', true);
+    inspect(schema);
+    if (schemaProperty(schema, 'type') === 'object') result.string = false;
+    return result;
+  } catch {
+    // Never let a schema trap become tool-visible exception text, including during normalization.
+    throw new Error(SCHEMA_INSPECTION_ERROR);
+  }
+}
+
+/** Uses the callee's execution schema; uncertain declarations retain the original arguments. */
+export function stripIntentForInvoke(
+  args: unknown,
+  tool: { schema?: unknown }
+): unknown {
+  const schema = inspectToolInputSchema(tool);
+  if (
+    !schema.object ||
+    schema.intent !== 'absent' ||
+    (typeof args === 'string' && schema.string)
+  ) {
+    return args;
+  }
+  return stripIntent(args);
+}
+
+/** Invocation-local UI input; a symbol keeps it out of serialized tracing metadata. */
+export const PROGRAMMATIC_TOOL_INPUT = Symbol('programmaticToolInput');
 
 /**
  * Resolves the settled label for a call from its model-authored `intent` and

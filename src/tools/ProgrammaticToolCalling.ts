@@ -43,12 +43,17 @@ import {
   normalizeArtifactTruncation,
 } from '@/tools/ArtifactTruncation';
 import {
+  INTENT_PROPERTY,
+  PROGRAMMATIC_TOOL_INPUT,
+  inspectToolInputSchema,
+  stripIntentForInvoke,
+} from '@/tools/intentArg';
+import {
   describeCodeApiError,
   logCodeApiDiagnostic,
 } from '@/tools/diagnostics';
 import { appendExecutionArtifactFileSummary } from './CodeSessionFileSummary';
 import { resolveFetchProxyAgent } from '@/utils/proxy';
-import { INTENT_PROPERTY } from '@/tools/intentArg';
 import { Constants } from '@/common';
 
 config();
@@ -748,83 +753,11 @@ export function unwrapToolResponse(
   return result;
 }
 
-type ToolInputSchemaKind = {
-  object: boolean;
-  string: boolean;
-};
-
-function detectSchemaKind(schema: unknown): ToolInputSchemaKind {
-  const kind: ToolInputSchemaKind = { object: false, string: false };
-
-  if (schema == null || typeof schema !== 'object') {
-    return kind;
-  }
-
-  const jsonSchemaType = (schema as { type?: unknown }).type;
-  if (jsonSchemaType === 'object') {
-    kind.object = true;
-  } else if (jsonSchemaType === 'string') {
-    kind.string = true;
-  } else if (Array.isArray(jsonSchemaType)) {
-    kind.object = jsonSchemaType.includes('object');
-    kind.string = jsonSchemaType.includes('string');
-  }
-
-  const zodDef = (schema as { _def?: unknown })._def;
-  if (zodDef == null || typeof zodDef !== 'object') {
-    return kind;
-  }
-
-  const zodType = (zodDef as { type?: unknown; typeName?: unknown }).type;
-  const zodTypeName = (zodDef as { type?: unknown; typeName?: unknown })
-    .typeName;
-
-  if (zodType === 'object' || zodTypeName === 'ZodObject') {
-    kind.object = true;
-  } else if (zodType === 'string' || zodTypeName === 'ZodString') {
-    kind.string = true;
-  }
-
-  const innerSchema =
-    (
-      zodDef as {
-        innerType?: unknown;
-        schema?: unknown;
-        type?: unknown;
-      }
-    ).innerType ?? (zodDef as { schema?: unknown }).schema;
-  if (innerSchema != null) {
-    const innerKind = detectSchemaKind(innerSchema);
-    kind.object ||= innerKind.object;
-    kind.string ||= innerKind.string;
-  }
-
-  const options = (zodDef as { options?: unknown }).options;
-  if (Array.isArray(options)) {
-    for (const option of options) {
-      const optionKind = detectSchemaKind(option);
-      kind.object ||= optionKind.object;
-      kind.string ||= optionKind.string;
-    }
-  }
-
-  return kind;
-}
-
-function getToolInputSchemaKind(tool: t.GenericTool): ToolInputSchemaKind {
-  if (tool.constructor.name === 'DynamicTool') {
-    return { object: false, string: true };
-  }
-
-  const schema = (tool as { schema?: unknown }).schema;
-  return detectSchemaKind(schema);
-}
-
 function normalizeToolInput(
   input: t.PTCToolCall['input'],
   tool: t.GenericTool
 ): t.PTCToolCall['input'] {
-  const schemaKind = getToolInputSchemaKind(tool);
+  const schemaKind = inspectToolInputSchema(tool);
 
   if (typeof input !== 'string') {
     if (!schemaKind.string || schemaKind.object) {
@@ -890,9 +823,16 @@ export async function executeTools(
     }
 
     try {
-      const result = await tool.invoke(normalizeToolInput(call.input, tool), {
+      const invokeConfig = {
         metadata: { [programmaticToolName]: true },
+      };
+      Object.defineProperty(invokeConfig, PROGRAMMATIC_TOOL_INPUT, {
+        value: call.input,
       });
+      const result = await tool.invoke(
+        stripIntentForInvoke(normalizeToolInput(call.input, tool), tool),
+        invokeConfig
+      );
 
       const isMCPTool = tool.mcp === true;
       const unwrappedResult = unwrapToolResponse(result, isMCPTool);
