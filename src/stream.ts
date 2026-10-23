@@ -1426,6 +1426,30 @@ function startPreparedSubagents(
   }
 }
 
+function getReasoningSummaryText(
+  reasoning: ReasoningSummaryLike | undefined
+): string | undefined {
+  const summary = reasoning?.summary;
+  if (!Array.isArray(summary)) return undefined;
+  let text = '';
+  for (const part of summary) {
+    if (typeof part.text === 'string') text += part.text;
+  }
+  return text || undefined;
+}
+
+/** additional_kwargs 是 provider 边界上的未定型数据。 */
+function getReasoningContent(
+  reasoning: unknown
+): string | t.MessageContentComplex[] | undefined {
+  if (typeof reasoning === 'string' || Array.isArray(reasoning)) {
+    return reasoning.length > 0 ? reasoning : undefined;
+  }
+  if (reasoning == null || typeof reasoning !== 'object') return undefined;
+  // Responses 的 reasoning 对象只公开 summary 文本，不公开其他元数据。
+  return getReasoningSummaryText(reasoning as ReasoningSummaryLike);
+}
+
 export function getChunkContent({
   chunk,
   provider,
@@ -1443,55 +1467,29 @@ export function getChunkContent({
     return chunk.content;
   }
 
-  if (
-    (provider === Providers.OPENAI || provider === Providers.AZURE) &&
-    (
-      chunk?.additional_kwargs?.reasoning as
-        | Partial<ChatOpenAIReasoningSummary>
-        | undefined
-    )?.summary?.[0]?.text != null &&
-    ((
-      chunk?.additional_kwargs?.reasoning as
-        | Partial<ChatOpenAIReasoningSummary>
-        | undefined
-    )?.summary?.[0]?.text?.length ?? 0) > 0
-  ) {
-    return (
-      chunk?.additional_kwargs?.reasoning as
-        | Partial<ChatOpenAIReasoningSummary>
-        | undefined
-    )?.summary?.[0]?.text;
+  if (provider === Providers.OPENAI || provider === Providers.AZURE) {
+    const summaryText = getReasoningSummaryText(
+      chunk?.additional_kwargs?.reasoning as ReasoningSummaryLike | undefined
+    );
+    if (summaryText != null) return summaryText;
   }
-  if (provider === Providers.OPENROUTER) {
-    // Content presence signals end of reasoning phase - prefer content over reasoning
-    // This handles transitional chunks that may have both reasoning and content
-    if (typeof chunk?.content === 'string' && chunk.content !== '') {
-      return chunk.content;
-    }
-    const reasoning = chunk?.additional_kwargs?.reasoning as string | undefined;
-    if (reasoning != null && reasoning !== '') {
-      return reasoning;
-    }
-    const reasoningContent = chunk?.additional_kwargs?.reasoning_content as
-      | string
-      | undefined;
-    if (reasoningContent != null && reasoningContent !== '') {
-      return reasoningContent;
-    }
-    return chunk?.content;
-  }
-  const keyedReasoning = chunk?.additional_kwargs?.[reasoningKey] as
-    | string
-    | undefined;
-  if (
-    typeof chunk?.content === 'string' &&
-    chunk.content !== '' &&
-    keyedReasoning != null &&
-    keyedReasoning !== ''
-  ) {
+
+  // 正文出现时沿用原优先级；空 reasoning 不能遮蔽同一 chunk 的正文。
+  if (typeof chunk?.content === 'string' && chunk.content !== '') {
     return chunk.content;
   }
-  return ((keyedReasoning as string | undefined) ?? '') || chunk?.content;
+
+  if (provider === Providers.OPENROUTER) {
+    return (
+      getReasoningContent(chunk?.additional_kwargs?.reasoning) ??
+      getReasoningContent(chunk?.additional_kwargs?.reasoning_content) ??
+      chunk?.content
+    );
+  }
+  return (
+    getReasoningContent(chunk?.additional_kwargs?.[reasoningKey]) ??
+    chunk?.content
+  );
 }
 
 function isDisableStreamingEnabled(
@@ -2219,8 +2217,7 @@ hasToolCallChunks: ${hasToolCallChunks}
         agentContext.provider === Providers.AZURE) &&
       reasoning_content != null &&
       typeof reasoning_content !== 'string' &&
-      reasoning_content.summary?.[0]?.text != null &&
-      reasoning_content.summary[0].text
+      hasReasoningContent(reasoning_content)
     ) {
       reasoning_content = 'valid';
     } else if (
