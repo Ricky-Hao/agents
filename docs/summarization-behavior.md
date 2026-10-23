@@ -98,6 +98,12 @@ Raw conversation messages are sent to the LLM via `attemptInvoke` with the summa
 
 If the primary call fails, configured fallback providers are attempted (via `tryFallbackProviders`). If all providers fail, the diagnostic metadata stub is never committed as a summary, for any trigger. Existing summary state and history remain intact; the failure guard bounds subsequent attempts. Empty output and interrupted attempts likewise cannot advance the compaction boundary. Summary carriers identify generated context without claiming the current model authored it; prompts preserve uncertainty about tool results and truncation.
 
+### 摘要流内容契约
+
+`on_summarize_delta` 的 `summary.content` 始终是内容块数组。字符串转成 text 块，合法内容块保持原顺序。结构化 reasoning 只提取 `summary` 中的文本，不输出对象或其他元数据。空 reasoning 不发送空 delta，也不能遮蔽同一 chunk 或后续 chunk 的正文。
+
+流中的 reasoning 只用于临时显示。完成事件用最终摘要替换临时内容；保存的摘要只取正文。只有 reasoning、空输出或失败的尝试不能推进摘要边界。
+
 ### Summarization Prompt
 
 The prompt is written in the tone of a user directing the assistant — assertive, first-person, active voice:

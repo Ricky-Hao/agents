@@ -1744,15 +1744,19 @@ export function createSummarizationChunkHandler({
       config.signal
     );
     if (protectionTrip != null) throw protectionTrip;
-    const chunkAny = chunk as Parameters<typeof getChunkContent>[0]['chunk'];
-    const raw = getChunkContent({ chunk: chunkAny, provider, reasoningKey });
-    if (raw == null || (typeof raw === 'string' && !raw)) {
+    const messageChunk = chunk as Parameters<
+      typeof getChunkContent
+    >[0]['chunk'];
+    const raw = getChunkContent({
+      chunk: messageChunk,
+      provider,
+      reasoningKey,
+    });
+    if (raw == null || raw.length === 0) {
       return;
     }
     const contentBlocks: t.MessageContentComplex[] =
-      typeof raw === 'string'
-        ? [{ type: ContentTypes.TEXT, text: raw } as t.MessageContentComplex]
-        : raw;
+      typeof raw === 'string' ? [{ type: ContentTypes.TEXT, text: raw }] : raw;
 
     void safeDispatchCustomEvent(
       GraphEvents.ON_SUMMARIZE_DELTA,
