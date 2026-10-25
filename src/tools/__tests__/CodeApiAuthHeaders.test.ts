@@ -905,8 +905,11 @@ describe('CodeAPI auth header injection', () => {
 
     const output = await tool.invoke({ command: 'touch /tmp/transient' });
 
-    expect(output).toContain('write files needed later into the selected project');
-    expect(output).not.toContain('use /mnt/data for files needed later');
+    expect(output).toContain(
+      'keep necessary project files in the selected project'
+    );
+    expect(output).toContain('not the execution-scoped artifact directory');
+    expect(output).not.toContain('use /mnt/data');
   });
 
   it('routes bash tools by trusted per-agent profile', async () => {

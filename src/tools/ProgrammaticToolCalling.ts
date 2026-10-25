@@ -1,6 +1,5 @@
 // src/tools/ProgrammaticToolCalling.ts
 import { config } from 'dotenv';
-import { normalizeProgrammaticToolResponse } from './response';
 import { randomUUID } from 'node:crypto';
 import fetch, { RequestInit } from 'node-fetch';
 import { tool, DynamicStructuredTool } from '@langchain/core/tools';
@@ -31,6 +30,12 @@ import {
   type ProgrammaticInvocationParams,
 } from './ProgrammaticCallerPolicy';
 import {
+  INTENT_PROPERTY,
+  PROGRAMMATIC_TOOL_INPUT,
+  inspectToolInputSchema,
+  stripIntentForInvoke,
+} from '@/tools/intentArg';
+import {
   clampCodeApiRunTimeoutMs,
   createCodeApiRunTimeoutSchema,
   resolveCodeApiRunTimeoutMs,
@@ -44,16 +49,12 @@ import {
   normalizeArtifactTruncation,
 } from '@/tools/ArtifactTruncation';
 import {
-  INTENT_PROPERTY,
-  PROGRAMMATIC_TOOL_INPUT,
-  inspectToolInputSchema,
-  stripIntentForInvoke,
-} from '@/tools/intentArg';
-import {
   describeCodeApiError,
   logCodeApiDiagnostic,
 } from '@/tools/diagnostics';
 import { appendExecutionArtifactFileSummary } from './CodeSessionFileSummary';
+import { CODE_INTERNAL_FILE_GUIDANCE } from '@/tools/codeGuidance';
+import { normalizeProgrammaticToolResponse } from './response';
 import { resolveFetchProxyAgent } from '@/utils/proxy';
 import { Constants } from '@/common';
 
@@ -84,6 +85,7 @@ const CORE_RULES = `Rules:
 - Tool results are decoded Python values (dict/list/str)
 - Only print() output returns to the model
 - ${CODE_ARTIFACT_PATH_GUIDANCE}
+- ${CODE_INTERNAL_FILE_GUIDANCE}
 - timeout caps one sandbox run/replay iteration, not the total multi-round-trip workflow`;
 
 const ADDITIONAL_RULES =

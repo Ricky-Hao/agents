@@ -1126,6 +1126,42 @@ describe('AgentContext', () => {
       expect(result[0].content).toBe('Base');
     });
 
+    it('adds environment-neutral internal-file guidance once for both runners', async () => {
+      const ctx = createBasicContext({
+        agentConfig: {
+          instructions: 'Base',
+          toolDefinitions: [
+            { name: Constants.BASH_PROGRAMMATIC_TOOL_CALLING },
+            { name: Constants.PROGRAMMATIC_TOOL_CALLING },
+          ],
+        },
+      });
+
+      const content = String((await ctx.systemRunnable!.invoke([]))[0].content);
+      expect(content).toContain('Prefer memory for single-call reads');
+      expect(content).toContain('unique /tmp scratch (mktemp)');
+      expect(content).toContain('consume it and clean it up in that call');
+      expect(content).toContain(
+        'prompts, receipts, bridge scripts or report copies'
+      );
+      expect(content).toContain('authorized original workspace');
+      expect(content).toContain('rather than defaulting to base64 round-trips');
+      expect(content).toContain(
+        'Requested files and necessary deliverables are allowed'
+      );
+      expect(content).toContain('follow the tool/environment storage rules');
+      expect(content).toContain(
+        'Never hide files or change extensions to evade collection'
+      );
+      expect(
+        content.match(
+          /A callback completion notice is not a request for attachments/g
+        )
+      ).toHaveLength(1);
+      expect(content).not.toContain('/mnt/data');
+      expect(content).not.toContain('Only /mnt/data is durable');
+    });
+
     it('includes code_execution-only tools in system message', async () => {
       const toolRegistry: t.LCToolRegistry = new Map([
         [

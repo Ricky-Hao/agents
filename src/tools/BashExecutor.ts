@@ -27,6 +27,10 @@ import {
   appendArtifactTruncationWarning,
   normalizeArtifactTruncation,
 } from '@/tools/ArtifactTruncation';
+import {
+  ATTACHED_CODE_ARTIFACT_PATH_GUIDANCE,
+  CODE_INTERNAL_FILE_GUIDANCE,
+} from '@/tools/codeGuidance';
 import { appendExecutionArtifactFileSummary } from '@/tools/CodeSessionFileSummary';
 import { resolveAttachedWorkspaceInstanceId } from '@/tools/workspaceIdentity';
 import { prepareBashProgrammaticCode } from './BashProgrammaticToolCalling';
@@ -48,6 +52,7 @@ export const BashExecutionToolSchema = {
 - The environment is stateless; variables and state don't persist between executions.
 - Prior /mnt/data files are available and can be modified in place.
 - ${CODE_ARTIFACT_PATH_GUIDANCE}
+- ${CODE_INTERNAL_FILE_GUIDANCE}
 - ${BASH_SHELL_GUIDANCE}
 - Input code **IS ALREADY** displayed to the user, so **DO NOT** repeat it in your response unless asked.
 - Output code **IS NOT** displayed to the user, so **DO** write all desired output explicitly.
@@ -104,7 +109,7 @@ Runs bash commands in the selected persistent project through an isolated sandbo
 
 Usage:
 - Project file changes persist between calls; shell variables, background processes, and execution-private temporary files do not.
-- Injected files and generated artifacts use \${LIBRECHAT_CODE_DATA_DIR:-/mnt/data}; write durable files to the project root.
+- ${ATTACHED_CODE_ARTIFACT_PATH_GUIDANCE}
 - Generated artifacts are automatically delivered; **DO NOT** provide download links.
 - ${BASH_SHELL_GUIDANCE}
 - NEVER use this tool to execute malicious commands.
@@ -161,10 +166,8 @@ const STATEFUL_BASH_PARAM_NOTE =
   'Files written to /mnt/data persist between calls on the same warm machine. Each call runs in a fresh sandbox: shell variables, cwd, /tmp, and background processes do NOT survive the call. Only /mnt/data is durable.';
 const ATTACHED_BASH_PARAM_NOTE =
   'Commands start in the selected persistent project. Project file changes persist, but shell variables, background processes, and execution-private temporary files do not.';
-const ATTACHED_BASH_ARTIFACT_PATH_GUIDANCE =
-  'Injected files and generated artifacts use `${LIBRECHAT_CODE_DATA_DIR:-/mnt/data}` for this execution only. Write anything needed later into the selected project.';
 const ATTACHED_BASH_TMP_REMINDER =
-  'Note: /tmp files are same-call scratch only and were not persisted; write files needed later into the selected project.';
+  'Note: /tmp files are same-call scratch only and were not persisted; keep necessary project files in the selected project, not the execution-scoped artifact directory.';
 
 export function buildBashExecutionToolSchema(opts?: {
   statefulSessions?: boolean;
@@ -183,8 +186,14 @@ export function buildBashExecutionToolSchema(opts?: {
     );
   if (opts?.attachedWorkspace === true) {
     commandDescription = commandDescription
-      .replace('- Prior /mnt/data files are available and can be modified in place.\n', '')
-      .replace(CODE_ARTIFACT_PATH_GUIDANCE, ATTACHED_BASH_ARTIFACT_PATH_GUIDANCE);
+      .replace(
+        '- Prior /mnt/data files are available and can be modified in place.\n',
+        ''
+      )
+      .replace(
+        CODE_ARTIFACT_PATH_GUIDANCE,
+        ATTACHED_CODE_ARTIFACT_PATH_GUIDANCE
+      );
   }
   return {
     ...BashExecutionToolSchema,

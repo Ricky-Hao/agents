@@ -53,6 +53,55 @@ describe('ProgrammaticToolCalling', () => {
       );
     });
 
+    it.each([
+      [
+        'Python',
+        createProgrammaticToolCallingTool,
+        createProgrammaticToolCallingSchema,
+      ],
+      [
+        'Bash',
+        createBashProgrammaticToolCallingTool,
+        createBashProgrammaticToolCallingSchema,
+      ],
+    ] as const)(
+      'keeps %s internal processing separate from delivery',
+      (_name, createTool, createSchema) => {
+        const tool = createTool();
+        const parameter = createSchema().properties.code.description;
+
+        for (const description of [tool.description, parameter]) {
+          expect(description).toContain('Prefer memory for single-call reads');
+          expect(description).toContain('unique /tmp scratch (mktemp)');
+          expect(description).toContain(
+            'consume it and clean it up in that call'
+          );
+          expect(description).toContain(
+            'automatically collected/displayed, not private scratch'
+          );
+          expect(description).toContain(
+            'requested files, necessary deliverables, or unavoidable cross-call storage'
+          );
+          expect(description).toContain(
+            'prompts, receipts, bridge scripts or report copies'
+          );
+          expect(description).toContain(
+            'A callback completion notice is not a request for attachments'
+          );
+          expect(description).toContain('authorized original workspace');
+          expect(description).toContain(
+            'rather than defaulting to base64 round-trips'
+          );
+          expect(description).toContain(
+            'Never hide files or change extensions to evade collection'
+          );
+          expect(description).not.toContain('Anything a later call needs');
+          expect(description).not.toContain('/mnt/data/sf.json');
+          expect(description).not.toContain('/mnt/data/ny.json');
+        }
+      }
+    );
+
     it('explains bash inner-tool stdout shape', () => {
       const schema = createBashProgrammaticToolCallingSchema();
       const description = schema.properties.code.description;
@@ -64,10 +113,59 @@ describe('ProgrammaticToolCalling', () => {
       expect(description).toContain('only for JSON-string fields');
       expect(description).toContain('raw=$(tool');
       expect(description).toContain('direct tool > file may be empty');
-      expect(description).toContain('/mnt/data/sf.json');
+      expect(description).toContain('mktemp -d /tmp/ptc.XXXXXXXXXX');
+      expect(description).toContain('trap \'rm -rf -- "$tmp_dir"\' EXIT');
+      expect(description).toContain('sf=$(web_search');
+      expect(description).toContain('ny=$(web_search');
+      expect(description).toContain('> "$tmp_dir/sf.json"');
+      expect(description).toContain('> "$tmp_dir/ny.json"');
+      expect(description).toContain('Only when an HTML preview is requested');
+      expect(description).toContain('> /mnt/data/report.html');
       expect(description).toContain('Failed executions register nothing');
-      expect(description).toContain('`/tmp` never survives the call');
+      expect(description).toContain(
+        '`/tmp` and other sandbox directories are not durable'
+      );
       expect(schema.properties.tool_manifest.uniqueItems).toBe(true);
+    });
+
+    it('uses same-call scratch and execution-scoped delivery in attached Bash PTC', () => {
+      const tool = createBashProgrammaticToolCallingTool({
+        workspaceId: 'project-a',
+      });
+      const schema = tool.schema as ReturnType<
+        typeof createBashProgrammaticToolCallingSchema
+      >;
+
+      for (const description of [
+        tool.description,
+        schema.properties.code.description,
+      ]) {
+        expect(description).toContain(
+          'project file changes persist between calls'
+        );
+        expect(description).toContain('raw=$(tool');
+        expect(description).toContain('direct tool > file may be empty');
+        expect(description).toContain('mktemp -d /tmp/ptc.XXXXXXXXXX');
+        expect(description).toContain('trap \'rm -rf -- "$tmp_dir"\' EXIT');
+        expect(description).toContain('> "$tmp_dir/sf.json"');
+        expect(description).toContain('> "$tmp_dir/ny.json"');
+        expect(description).toContain(
+          'execution-scoped, not cross-call storage'
+        );
+        expect(description).toContain('authorized selected project/workspace');
+        expect(description).toContain('Only when an HTML preview is requested');
+        expect(description).toContain(
+          '> "${LIBRECHAT_CODE_DATA_DIR:-/mnt/data}"/report.html'
+        );
+        expect(description).toContain(
+          'A callback completion notice is not a request for attachments'
+        );
+        expect(description).not.toContain('Managed sandbox:');
+        expect(description).not.toContain('unavoidable cross-call storage');
+        expect(description).not.toContain('/mnt/data/report.html');
+        expect(description).not.toContain('$data_dir/sf.json');
+        expect(description).not.toContain('$data_dir/ny.json');
+      }
     });
   });
 
@@ -1145,7 +1243,8 @@ for member in team:
     });
 
     it.each([{ size: -1 }, { max_files: 70 }, {}])(
-      'ignores malformed truncation reasons %j in programmatic responses', (reasons) => {
+      'ignores malformed truncation reasons %j in programmatic responses',
+      (reasons) => {
         const [output, artifact] = formatCompletedResponse({
           status: 'completed',
           stdout: 'done\n',
@@ -1160,7 +1259,8 @@ for member in team:
 
         expect(output).not.toContain('omitted from delivery');
         expect(artifact.artifact_truncation).toBeUndefined();
-      });
+      }
+    );
 
     it.each([1, 70])(
       'preserves other response metadata when reason count is %i',
@@ -1194,7 +1294,9 @@ for member in team:
         expect(output).toContain('stderr:\ndiagnostic');
         expect(output).toContain('Artifact delivery warning:');
         expect(output).toContain('Generated files:');
-        expect(output.includes('omitted from delivery')).toBe(reasonCount === 1);
+        expect(output.includes('omitted from delivery')).toBe(
+          reasonCount === 1
+        );
         expect(artifact).toEqual({
           session_id: response.session_id,
           runtime_session_id: response.runtime_session_id,
@@ -1209,24 +1311,33 @@ for member in team:
       }
     );
 
-    it('adds a /tmp scratch reminder when source code used /tmp', () => {
-      const response: t.ProgrammaticExecutionResponse = {
-        status: 'completed',
-        stdout: 'done\n',
-        stderr: '',
-        files: [],
-        session_id: 'sess_abc123',
-      };
+    it.each(['session', 'execution'] as const)(
+      'keeps the /tmp scratch reminder environment-neutral (%s files)',
+      (filePersistence) => {
+        const response: t.ProgrammaticExecutionResponse = {
+          status: 'completed',
+          stdout: 'done\n',
+          stderr: '',
+          files: [],
+          session_id: 'sess_abc123',
+        };
 
-      const [output] = formatCompletedResponse(
-        response,
-        'tool "{}" > /tmp/result.json'
-      );
+        const [output] = formatCompletedResponse(
+          response,
+          'tmp_file=$(mktemp /tmp/ptc.XXXXXXXXXX); trap \'rm -f -- "$tmp_file"\' EXIT; raw=$(tool "{}"); printf "%s" "$raw" > "$tmp_file"',
+          filePersistence
+        );
 
-      expect(output).toContain('stdout:\ndone');
-      expect(output).toContain('/tmp files are same-call scratch only');
-      expect(output).toContain('use /mnt/data for files needed later');
-    });
+        expect(output).toContain('stdout:\ndone');
+        expect(output).toContain('/tmp files are same-call scratch only');
+        expect(output).toContain('Prefer memory or one-call processing');
+        expect(output).toContain(
+          'storage rules for requested files, necessary deliverables or unavoidable cross-call needs'
+        );
+        expect(output).toContain('automatically collected/displayed');
+        expect(output).not.toContain('use /mnt/data');
+      }
+    );
 
     it('preserves files on the artifact and summarizes them without listing paths', () => {
       const response: t.ProgrammaticExecutionResponse = {

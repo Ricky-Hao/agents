@@ -1,0 +1,5 @@
+export const CODE_INTERNAL_FILE_GUIDANCE =
+  'Prefer memory for single-call reads, parsing, encoding conversion, aggregation and temporary scripts. If same-call disk work is necessary, use unique /tmp scratch (mktemp), consume it and clean it up in that call. Do not export prompts, receipts, bridge scripts or report copies solely for internal processing or recordkeeping. A callback completion notice is not a request for attachments. Read needed excerpts from the authorized original workspace rather than defaulting to base64 round-trips that recreate sandbox files. Requested files and necessary deliverables are allowed; follow the tool/environment storage rules. Never hide files or change extensions to evade collection.';
+
+export const ATTACHED_CODE_ARTIFACT_PATH_GUIDANCE =
+  'Attached workspace: use `${LIBRECHAT_CODE_DATA_DIR:-/mnt/data}` for injected files and requested files or necessary output artifacts. Generated artifacts are automatically collected/displayed. This directory is execution-scoped, not cross-call storage; keep necessary durable project files in the authorized selected project/workspace.';

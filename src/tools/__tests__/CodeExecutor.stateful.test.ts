@@ -64,11 +64,53 @@ describe('CodeExecutor stateful description', () => {
       buildCodeExecutionToolSchema().properties.code.description;
     const stateful = buildCodeExecutionToolSchema({ statefulSessions: true })
       .properties.code.description;
-    expect(stateless).toContain('variables and imports don\'t persist');
+    expect(stateless).toMatch(/variables and imports don't persist/);
     expect(stateful).toContain('do NOT carry over');
     expect(stateful).toContain('/mnt/data');
     expect(stateful).not.toContain('typically still defined');
+    expect(stateful).not.toContain('reload from /mnt/data every call');
   });
+
+  it.each([false, true])(
+    'limits internal files and delivery in managed mode (stateful=%s)',
+    (statefulSessions) => {
+      const description = buildCodeExecutionToolDescription({
+        statefulSessions,
+      });
+      const parameter = buildCodeExecutionToolSchema({ statefulSessions })
+        .properties.code.description;
+
+      for (const text of [description, parameter]) {
+        expect(text).toContain(
+          'automatically collected/displayed, not private scratch'
+        );
+        expect(text).toContain(
+          'requested files, necessary deliverables, or unavoidable cross-call storage'
+        );
+        expect(text).toContain(
+          'Prefer memory or unique same-call /tmp scratch (mktemp), with cleanup'
+        );
+        expect(text).toContain(
+          '`/tmp` and other sandbox directories are not durable'
+        );
+        expect(text).not.toContain('Anything a later call needs');
+        expect(text).not.toContain('write anything that must survive there');
+      }
+      expect(parameter).toContain(
+        'prompts, receipts, bridge scripts or report copies'
+      );
+      expect(parameter).toContain(
+        'A callback completion notice is not a request for attachments'
+      );
+      expect(parameter).toContain('authorized original workspace');
+      expect(parameter).toContain(
+        'rather than defaulting to base64 round-trips'
+      );
+      expect(parameter).toContain(
+        'Never hide files or change extensions to evade collection'
+      );
+    }
+  );
 });
 
 describe('CodeExecutor runtime_session_hint wire field', () => {
