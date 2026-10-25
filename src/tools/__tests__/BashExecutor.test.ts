@@ -4,6 +4,7 @@ import {
   BashToolOutputReferencesGuide,
   StatefulBashExecutionToolDescription,
   buildBashExecutionToolDescription,
+  buildBashExecutionToolSchema,
 } from '../BashExecutor';
 import { CODE_ARTIFACT_PATH_GUIDANCE } from '../CodeExecutor';
 
@@ -26,8 +27,44 @@ describe('buildBashExecutionToolDescription', () => {
     expect(BashExecutionToolDescription).toContain(
       'Failed executions register nothing'
     );
-    expect(BashExecutionToolDescription).toContain('`/tmp` never survives the call');
+    expect(BashExecutionToolDescription).toContain(
+      '`/tmp` and other sandbox directories are not durable'
+    );
   });
+
+  it.each([false, true])(
+    'limits delivery and persistence in managed mode (stateful=%s)',
+    (statefulSessions) => {
+      const description = buildBashExecutionToolDescription({
+        statefulSessions,
+      });
+      const parameter = buildBashExecutionToolSchema({ statefulSessions })
+        .properties.command.description;
+
+      for (const text of [description, parameter]) {
+        expect(text).toContain(
+          'automatically collected/displayed, not private scratch'
+        );
+        expect(text).toContain(
+          'requested files, necessary deliverables, or unavoidable cross-call storage'
+        );
+        expect(text).toContain(
+          'Prefer memory or unique same-call /tmp scratch (mktemp), with cleanup'
+        );
+        expect(text).not.toContain('Anything a later call needs');
+      }
+      expect(parameter).toContain(
+        'prompts, receipts, bridge scripts or report copies'
+      );
+      expect(parameter).toContain(
+        'A callback completion notice is not a request for attachments'
+      );
+      expect(parameter).toContain('authorized original workspace');
+      expect(parameter).toContain(
+        'Never hide files or change extensions to evade collection'
+      );
+    }
+  );
 
   it('appends the tool-output references guide when enabled', () => {
     const composed = buildBashExecutionToolDescription({
@@ -48,7 +85,7 @@ describe('buildBashExecutionToolDescription', () => {
      * rediscover it.
      */
     expect(BashToolOutputReferencesGuide).toContain('heredoc');
-    expect(BashToolOutputReferencesGuide).toContain('<< \'EOF\'');
+    expect(BashToolOutputReferencesGuide).toMatch(/<< 'EOF'/);
   });
 
   it('separates base and guide with a blank line', () => {
@@ -106,15 +143,28 @@ describe('buildBashExecutionToolDescription', () => {
     });
   });
 
-  it('removes /mnt/data persistence claims from attached workspace parameters', async () => {
-    const { buildBashExecutionToolSchema } = await import('../BashExecutor');
-    const description = buildBashExecutionToolSchema({
+  it('keeps attached project persistence separate from execution-scoped delivery', () => {
+    const description = buildBashExecutionToolDescription({
+      attachedWorkspace: true,
+    });
+    const parameter = buildBashExecutionToolSchema({
       attachedWorkspace: true,
     }).properties.command.description;
 
-    expect(description).toContain('selected persistent project');
-    expect(description).toContain('Write anything needed later into the selected project');
-    expect(description).not.toContain('Prior /mnt/data files');
-    expect(description).not.toContain('Anything a later call needs');
+    for (const text of [description, parameter]) {
+      expect(text).toContain('selected persistent project');
+      expect(text).toContain('${LIBRECHAT_CODE_DATA_DIR:-/mnt/data}');
+      expect(text).toContain('requested files or necessary output artifacts');
+      expect(text).toContain('automatically collected/displayed');
+      expect(text).toContain('execution-scoped, not cross-call storage');
+      expect(text).toContain('authorized selected project/workspace');
+      expect(text).not.toContain('Prior /mnt/data files');
+      expect(text).not.toContain('Managed sandbox:');
+      expect(text).not.toContain('unavoidable cross-call storage');
+    }
+    expect(parameter).toContain('Prefer memory for single-call reads');
+    expect(parameter).toContain(
+      'A callback completion notice is not a request for attachments'
+    );
   });
 });

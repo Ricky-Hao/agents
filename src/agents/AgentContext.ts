@@ -59,6 +59,7 @@ import { isTokenCounterCacheCompatible } from '@/llm/tokenCounterCacheCompatibil
 import { snapshotCompactionSemanticIndex } from '@/summarization/semanticIndex';
 import { createExactTokenCountCache } from '@/llm/contextPressureMeter';
 import { markProviderTextInput } from '@/protection/providerTextInput';
+import { CODE_INTERNAL_FILE_GUIDANCE } from '@/tools/codeGuidance';
 import { buildSummaryCarrierText } from '@/summarization/shared';
 import { createSchemaOnlyTools } from '@/tools/schema';
 import { apportionTokenCounts } from '@/utils/tokens';
@@ -611,6 +612,7 @@ export class AgentContext {
     const showGroupLabels = groups.length > 1;
     return (
       '\n\n## Programmatic Tool Calling' +
+      `\n\n${CODE_INTERNAL_FILE_GUIDANCE}` +
       groups
         .map(
           ({ tools, capabilities, label }) =>

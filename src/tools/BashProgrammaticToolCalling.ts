@@ -32,8 +32,12 @@ import {
   runPlainExecution,
   formatCompletedResponse,
 } from './ProgrammaticToolCalling';
-import { logCodeApiDiagnostic } from '@/tools/diagnostics';
+import {
+  ATTACHED_CODE_ARTIFACT_PATH_GUIDANCE,
+  CODE_INTERNAL_FILE_GUIDANCE,
+} from '@/tools/codeGuidance';
 import { resolveAttachedWorkspaceInstanceId } from '@/tools/workspaceIdentity';
+import { logCodeApiDiagnostic } from '@/tools/diagnostics';
 import { INTENT_PROPERTY } from '@/tools/intentArg';
 import { Constants } from '@/common';
 
@@ -48,9 +52,6 @@ const DEFAULT_RUN_TIMEOUT_MS = resolveCodeApiRunTimeoutMs();
 const BASH_LAST_BACKGROUND_PID_GUARD = ': &\nwait "$!"';
 const CODE_API_WORKSPACE_HEADER = 'X-LibreChat-Code-Workspace-ID';
 const ATTACHED_BASH_DATA_DIRECTORY = '"${LIBRECHAT_CODE_DATA_DIR:-/mnt/data}"';
-const ATTACHED_BASH_ARTIFACT_PATH_GUIDANCE =
-  `Use ${ATTACHED_BASH_DATA_DIRECTORY} for injected files and generated artifacts. ` +
-  'The directory is execution-scoped; the selected workspace is the persistent project root.';
 
 /** Bash reserved words that get `_tool` suffix when used as function names */
 const BASH_RESERVED = new Set([
@@ -91,16 +92,17 @@ DO NOT split work across multiple calls expecting to reuse variables.`;
 const ATTACHED_WORKSPACE_WARNING = `ATTACHED WORKSPACE EXECUTION:
 - Commands start in the selected persistent workspace; project file changes persist between calls.
 - Each sandbox run is a fresh process, so shell variables, background processes, and temporary execution data do not persist.
-- Injected files and generated artifacts use \${LIBRECHAT_CODE_DATA_DIR:-/mnt/data}; do not copy them into the project unless the task requires it.`;
+- The artifact directory is execution-scoped; it is not the persistent project root.`;
 
 const CORE_RULES = `Rules:
 - One call: state does not persist
 - Tools are pre-defined as bash functions—DO NOT redefine them
 - Each tool function accepts a JSON string argument
-- Save tool output with raw=$(tool '{}'); printf '%s\n' "$raw" > /mnt/data/file.json; direct tool > file may be empty
-- Tool stdout is normalized to one compact JSON value when possible; parse saved stdout once, then use fromjson? // . only for JSON-string fields
+- Capture tool output with raw=$(tool '{}') before processing it; direct tool > file may be empty
+- Tool stdout is normalized to one compact JSON value when possible; parse captured stdout once, then use fromjson? // . only for JSON-string fields
 - Only echo/printf output returns to the model
 - ${CODE_ARTIFACT_PATH_GUIDANCE}
+- ${CODE_INTERNAL_FILE_GUIDANCE}
 - ${BASH_SHELL_GUIDANCE}
 - timeout caps one sandbox run/replay iteration, not the total multi-round-trip workflow`;
 
@@ -110,38 +112,37 @@ const ADDITIONAL_RULES =
 const EXAMPLES = `Example (Complete workflow in one call):
   # Query data and process
   data=$(query_database '{"sql": "SELECT * FROM users"}')
-  echo "$data" | jq '.[] | .name'
+  printf '%s\\n' "$data" | jq '.[] | .name'
 
 Example (Parallel calls):
-  { sf=$(web_search '{"query": "SF weather"}'); printf '%s\n' "$sf" > /mnt/data/sf.json; } &
-  { ny=$(web_search '{"query": "NY weather"}'); printf '%s\n' "$ny" > /mnt/data/ny.json; } &
+  tmp_dir=$(mktemp -d /tmp/ptc.XXXXXXXXXX) || exit 1
+  trap 'rm -rf -- "$tmp_dir"' EXIT
+  { sf=$(web_search '{"query": "SF weather"}'); printf '%s\\n' "$sf" > "$tmp_dir/sf.json"; } &
+  { ny=$(web_search '{"query": "NY weather"}'); printf '%s\\n' "$ny" > "$tmp_dir/ny.json"; } &
   wait
-  echo "SF: $(jq -r . /mnt/data/sf.json)"
-  echo "NY: $(jq -r . /mnt/data/ny.json)"`;
+  echo "SF: $(jq -r . "$tmp_dir/sf.json")"
+  echo "NY: $(jq -r . "$tmp_dir/ny.json")"
+
+Example (Only when an HTML preview is requested):
+  printf '%s\\n' '<!doctype html><title>Report</title><p>Summary</p>' > /mnt/data/report.html`;
 
 const ATTACHED_CORE_RULES = `Rules:
 - One call: process state does not persist; project files do
 - Tools are pre-defined as bash functions—DO NOT redefine them
 - Each tool function accepts a JSON string argument
+- Capture tool output with raw=$(tool '{}') before processing it; direct tool > file may be empty
 - Resolve tool calls into variables before changing project files; do not redirect a tool call directly into the project
-- Set data_dir=${ATTACHED_BASH_DATA_DIRECTORY}; save generated artifacts there, and write durable project files relative to the working directory
-- Tool stdout is normalized to one compact JSON value when possible; parse saved stdout once, then use fromjson? // . only for JSON-string fields
+- Tool stdout is normalized to one compact JSON value when possible; parse captured stdout once, then use fromjson? // . only for JSON-string fields
 - Only echo/printf output returns to the model
-- ${ATTACHED_BASH_ARTIFACT_PATH_GUIDANCE}
+- ${ATTACHED_CODE_ARTIFACT_PATH_GUIDANCE}
+- ${CODE_INTERNAL_FILE_GUIDANCE}
 - ${BASH_SHELL_GUIDANCE}
 - timeout caps one sandbox run/replay iteration, not the total multi-round-trip workflow`;
 
-const ATTACHED_EXAMPLES = `Example (Complete workflow in one call):
-  data=$(query_database '{"sql": "SELECT * FROM users"}')
-  echo "$data" | jq '.[] | .name'
-
-Example (Parallel calls):
-  data_dir=${ATTACHED_BASH_DATA_DIRECTORY}
-  { sf=$(web_search '{"query": "SF weather"}'); printf '%s\n' "$sf" > "$data_dir/sf.json"; } &
-  { ny=$(web_search '{"query": "NY weather"}'); printf '%s\n' "$ny" > "$data_dir/ny.json"; } &
-  wait
-  echo "SF: $(jq -r . "$data_dir/sf.json")"
-  echo "NY: $(jq -r . "$data_dir/ny.json")"`;
+const ATTACHED_EXAMPLES = EXAMPLES.replace(
+  '> /mnt/data/report.html',
+  `> ${ATTACHED_BASH_DATA_DIRECTORY}/report.html`
+);
 
 const CODE_PARAM_DESCRIPTION = `Bash code that calls tools programmatically. Tools are available as bash functions.
 
