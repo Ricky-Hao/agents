@@ -38,8 +38,8 @@ import {
   cloneToolMessageWithContent,
   serializeStructuredValueBounded,
 } from '@/utils/toolContent';
-import { HARD_MAX_TOOL_RESULT_CHARS } from '@/utils/truncation';
 import { isReasoningContentBlock } from '@/messages/reasoningTypes';
+import { HARD_MAX_TOOL_RESULT_CHARS } from '@/utils/truncation';
 import { Constants } from '@/common';
 
 type StandardTextBlock = Data.StandardTextBlock;
@@ -56,10 +56,14 @@ type GoogleFunctionCallBlock = MessageContentComplex & {
 };
 
 const ANTHROPIC_EMPTY_TEXT_PLACEHOLDER = '_';
-const CLAUDE_4_RELEASE_DATE_MODEL_PATTERN =
-  /claude-(?:opus|sonnet|haiku)-4-\d{8}(?:[-.@]|$)/i;
-const CLAUDE_4_MINOR_MODEL_PATTERN =
-  /claude-(?:opus|sonnet|haiku)-4[-.](\d+)(?:[-.@]|$)/i;
+/**
+ * Name-first Claude ids (`claude-sonnet-4-6`, `claude-haiku-5.5`, Bedrock and
+ * Vertex forms included). The minor is one or two digits so an 8-digit release
+ * date (`claude-opus-4-20250514`) reads as major only. Number-first ids
+ * (`claude-3-5-sonnet`) predate 4.6 and never match.
+ */
+const CLAUDE_FAMILY_VERSION_PATTERN =
+  /claude-(?:opus|sonnet|haiku|fable|mythos)-(\d+)(?:[-.](\d{1,2}))?(?!\d)/i;
 
 function _formatImage(imageUrl: string) {
   const parsed = parseBase64DataUrl({ dataUrl: imageUrl });
@@ -147,6 +151,10 @@ export function normalizeAnthropicToolCallId(
   return `${sanitized.slice(0, prefixMaxLength)}_${hash}`;
 }
 
+function isContentObject(block: unknown): block is object {
+  return typeof block === 'object' && block !== null && !isProxy(block);
+}
+
 /**
  * Lift any `cache_control` off the inner blocks of a tool result onto the
  * `tool_result` block itself. Anthropic documents the top-level
@@ -164,7 +172,7 @@ function hoistToolResultCacheControl(
   }
   let cacheControl: unknown;
   const stripped = content.map((block) => {
-    if (typeof block !== 'object' || block == null || isProxy(block)) {
+    if (!isContentObject(block)) {
       return block;
     }
     try {
@@ -207,7 +215,7 @@ function unwrapToolMessageResultContent(content: ToolMessage['content']): {
   }
 
   const block = content[0];
-  if (typeof block !== 'object' || block == null || isProxy(block)) {
+  if (!isContentObject(block)) {
     return { content, cacheControl: undefined, isError: undefined };
   }
 
@@ -346,15 +354,15 @@ function _ensureMessageContents(
           unwrapped.content == null
             ? undefined
             : _formatContent(
-              unwrapped.content === toolMessageContent
-                ? toolMessage
-                : cloneToolMessageWithContent(
-                  toolMessage,
+                unwrapped.content === toolMessageContent
+                  ? toolMessage
+                  : cloneToolMessageWithContent(
+                      toolMessage,
                       unwrapped.content as Parameters<
                         typeof cloneToolMessageWithContent
                       >[1]
-                )
-            );
+                    )
+              );
         // Hoist a tail cache_control off the inner content onto the
         // tool_result block itself (the documented cacheable position).
         const { content: hoistedContent, cacheControl: innerCacheControl } =
@@ -959,8 +967,8 @@ function _formatContent(message: BaseMessage) {
         ) {
           const matchingToolCall = isAIMessage(message)
             ? message.tool_calls?.find(
-              (toolCall) => toolCall.id === contentPartCopy.id
-            )
+                (toolCall) => toolCall.id === contentPartCopy.id
+              )
             : undefined;
           if (matchingToolCall) {
             contentPartCopy.input = matchingToolCall.args;
@@ -1047,10 +1055,7 @@ function _formatContent(message: BaseMessage) {
           name: correspondingToolCall.name,
           input: functionCallPart.functionCall.args,
         };
-      } else if (
-        isAIMessage(message) &&
-        isReasoningContentBlock(contentPart)
-      ) {
+      } else if (isAIMessage(message) && isReasoningContentBlock(contentPart)) {
         // Foreign reasoning on an ASSISTANT turn (Bedrock `reasoning_content`,
         // Google `reasoning`, LibreChat `think`) carries provider-specific
         // signatures Anthropic cannot validate; drop it so a cross-provider
@@ -1139,11 +1144,11 @@ export function _convertMessagesToAnthropicPayload(
               clientToolCalls.length > 0
                 ? clientToolCalls.map(_convertLangChainToolCallToAnthropic)
                 : [
-                  {
-                    type: 'text' as const,
-                    text: ANTHROPIC_EMPTY_TEXT_PLACEHOLDER,
-                  },
-                ],
+                    {
+                      type: 'text' as const,
+                      text: ANTHROPIC_EMPTY_TEXT_PLACEHOLDER,
+                    },
+                  ],
           };
         } else {
           return {
@@ -1217,17 +1222,16 @@ export function _convertMessagesToAnthropicPayload(
   } as AnthropicMessageCreateParams;
 }
 
+/** Claude 4.6 and every later release (5.x, Fable, Mythos) reject a trailing assistant prefill. */
 export function modelDisallowsAssistantPrefill(model?: string): boolean {
-  const modelId = model ?? '';
-  if (CLAUDE_4_RELEASE_DATE_MODEL_PATTERN.test(modelId)) {
-    return false;
-  }
-
-  const match = CLAUDE_4_MINOR_MODEL_PATTERN.exec(modelId);
+  const match = CLAUDE_FAMILY_VERSION_PATTERN.exec(model ?? '');
   if (!match) {
     return false;
   }
-  return Number(match[1]) >= 6;
+  const [, majorText, minorText = '0'] = match;
+  const major = Number(majorText);
+  const minor = Number(minorText);
+  return major > 4 || (major === 4 && minor >= 6);
 }
 
 function messagesHaveCacheControl(

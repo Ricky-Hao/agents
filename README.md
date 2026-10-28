@@ -188,6 +188,18 @@ These are output limits, not bounds on provider memory or tool execution.
 
 See [the design decision](docs/adr/0010-project-accepted-model-results.md).
 
+## Local coding tools
+
+`toolExecution.local.codingToolNames` optionally selects the auto-bound local
+coding tools. Omit it to keep the full existing suite. This selection does not
+grant filesystem or command permissions.
+
+`toolExecution.local.toolResultMaxChars` optionally limits retained text from
+`read_file`, `grep_search`, and `bash_tool`. Unset keeps the existing limits.
+Read results include a continuation offset, search results count omitted lines,
+and shell results retain exit status. Truncation markers and diagnostic labels
+remain visible, including skipped-file notices whose paths are truncated.
+
 ## Development
 
 ```bash

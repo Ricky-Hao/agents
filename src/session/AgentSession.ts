@@ -975,10 +975,10 @@ export class AgentSession {
       params.runConfig.fadingTiers == null
         ? undefined
         : Object.fromEntries(
-          Object.entries(params.runConfig.fadingTiers).map(
-            ([agentId, tier]) => [agentId, { ...tier }]
-          )
-        );
+            Object.entries(params.runConfig.fadingTiers).map(
+              ([agentId, tier]) => [agentId, { ...tier }]
+            )
+          );
   }
 
   static async create(config: AgentSessionConfig): Promise<AgentSession> {
@@ -1122,10 +1122,10 @@ export class AgentSession {
         state.fadingTiers == null
           ? {}
           : Object.fromEntries(
-            Object.entries(state.fadingTiers).flatMap(([agentId, tier]) =>
-              isFadingTier(tier) ? [[agentId, { ...tier }] as const] : []
+              Object.entries(state.fadingTiers).flatMap(([agentId, tier]) =>
+                isFadingTier(tier) ? [[agentId, { ...tier }] as const] : []
+              )
             )
-          )
       );
     }
   }
@@ -1144,13 +1144,13 @@ export class AgentSession {
       ...(state.fadingTiers == null
         ? {}
         : {
-          fadingTiers: Object.fromEntries(
-            Object.entries(state.fadingTiers).map(([agentId, tier]) => [
-              agentId,
-              { ...tier },
-            ])
-          ),
-        }),
+            fadingTiers: Object.fromEntries(
+              Object.entries(state.fadingTiers).map(([agentId, tier]) => [
+                agentId,
+                { ...tier },
+              ])
+            ),
+          }),
     });
   }
 
@@ -1304,13 +1304,13 @@ export class AgentSession {
     const tuple =
       params.checkpointId != null && params.checkpointId !== ''
         ? await getSelectedCheckpointTuple(
-          this.checkpointing.checkpointer,
-          checkpointConfig
-        )
+            this.checkpointing.checkpointer,
+            checkpointConfig
+          )
         : await getLatestCheckpointTuple(
-          this.checkpointing.checkpointer,
-          params.config
-        );
+            this.checkpointing.checkpointer,
+            params.config
+          );
     if (!tuple) {
       return;
     }
@@ -1720,7 +1720,9 @@ export class AgentSession {
         options.retainRecentTurns,
         options.instructions
       ),
-      this.runConfig.tokenCounter
+      this.runConfig.tokenCounter,
+      undefined,
+      this.runConfig.toolExecution
     );
     const graph = createManualCompactGraph({
       runId: compactRunId,

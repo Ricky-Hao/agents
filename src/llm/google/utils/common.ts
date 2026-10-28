@@ -104,6 +104,15 @@ function createGoogleFunctionResponsePart({
  */
 export const iife = <T>(fn: () => T): T => fn();
 
+/** `gemini-3`, `gemini-3.8-flash`, `gemini-4-argon`, and any later major version. */
+const GEMINI_3_PLUS_PATTERN = /^gemini-(?:[3-9]|[1-9]\d+)(?:[.-]|$)/;
+
+/** Whether `model` (optionally `models/` or provider prefixed) is Gemini 3 or later. */
+export function isGemini3PlusModel(model?: string): boolean {
+  const modelId = model?.toLowerCase().split('/').pop() ?? '';
+  return GEMINI_3_PLUS_PATTERN.test(modelId);
+}
+
 export function getMessageAuthor(message: BaseMessage): string {
   const type = message._getType();
   if (ChatMessage.isInstance(message)) {
@@ -125,23 +134,23 @@ export function convertAuthorToRole(
   author: string
 ): (typeof POSSIBLE_ROLES)[number] {
   switch (author) {
-  /**
+    /**
      *  Note: Gemini currently is not supporting system messages
      *  we will convert them to human messages and merge with following
      * */
-  case 'supervisor':
-  case 'ai':
-  case 'model': // getMessageAuthor returns message.name. code ex.: return message.name ?? type;
-    return 'model';
-  case 'system':
-    return 'system';
-  case 'human':
-    return 'user';
-  case 'tool':
-  case 'function':
-    return 'function';
-  default:
-    throw new Error(`Unknown / unsupported author: ${author}`);
+    case 'supervisor':
+    case 'ai':
+    case 'model': // getMessageAuthor returns message.name. code ex.: return message.name ?? type;
+      return 'model';
+    case 'system':
+      return 'system';
+    case 'human':
+      return 'user';
+    case 'tool':
+    case 'function':
+      return 'function';
+    default:
+      throw new Error(`Unknown / unsupported author: ${author}`);
   }
 }
 
@@ -484,8 +493,8 @@ export function convertMessageContentToParts(
 
     const result = Array.isArray(message.content)
       ? (message.content
-        .map((c) => _convertLangChainContentToPart(c, isMultimodalModel))
-        .filter((p) => p !== undefined) as Part[])
+          .map((c) => _convertLangChainContentToPart(c, isMultimodalModel))
+          .filter((p) => p !== undefined) as Part[])
       : message.content;
 
     if (message.status === 'error') {
@@ -540,7 +549,7 @@ export function convertMessageContentToParts(
             return signature;
           }
         }
-        if (model?.includes('gemini-3') === true) {
+        if (isGemini3PlusModel(model)) {
           return DUMMY_SIGNATURE;
         }
         return '';
@@ -681,12 +690,17 @@ const NO_PREFILL_FLASH_MIN_VERSION = { major: 3, minor: 6 } as const;
 const GEMINI_FLASH_VERSION_PATTERN = /^gemini-(\d+)(?:\.(\d+))?-flash(?:$|-)/;
 
 /**
- * Models that reject prefill despite predating
- * {@link NO_PREFILL_FLASH_MIN_VERSION}. Gemini 3.5 Flash-Lite enforces the
+ * Models that reject prefill outside the Flash version cutoff
+ * ({@link NO_PREFILL_FLASH_MIN_VERSION}). Gemini 3.5 Flash-Lite enforces the
  * restriction while its sibling Gemini 3.5 Flash still accepts a trailing model
- * turn, so the 3.5 generation cannot be expressed as a version cutoff.
+ * turn, so the 3.5 generation cannot be expressed as a version cutoff. Gemini 4
+ * Argon is not a Flash model; its histories cannot end in a `model` turn.
+ * @see https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
  */
-const NO_PREFILL_GEMINI_MODELS = ['gemini-3.5-flash-lite'] as const;
+const NO_PREFILL_GEMINI_MODELS = [
+  'gemini-3.5-flash-lite',
+  'gemini-4-argon',
+] as const;
 
 export function rejectsModelTurnPrefill(model?: string): boolean {
   if (model == null || model === '') {
@@ -886,10 +900,10 @@ export function convertResponseContentToChatGenerationChunk(
   const response_metadata: Record<string, unknown> | undefined =
     toolCallChunks.length > 0
       ? {
-        [STREAMED_TOOL_CALL_ADAPTER_METADATA_KEY]:
+          [STREAMED_TOOL_CALL_ADAPTER_METADATA_KEY]:
             GOOGLE_STREAMED_TOOL_CALL_ADAPTER,
-        [STREAMED_TOOL_CALL_SEAL_METADATA_KEY]: { kind: 'all' },
-      }
+          [STREAMED_TOOL_CALL_SEAL_METADATA_KEY]: { kind: 'all' },
+        }
       : undefined;
 
   return new ChatGenerationChunk({
