@@ -97,7 +97,9 @@ function serializeForLabel(value: unknown, limit: number): string {
   }
   let budget = limit * 4;
   try {
+    // JSON.stringify can return undefined for symbols, functions, and toJSON results.
     return (
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       JSON.stringify(value, (_key, nested: unknown) => {
         if (budget <= 0) {
           throw ABORT_SERIALIZATION;
@@ -382,6 +384,7 @@ export function buildActivityPhaseLabelPrompt({
       return `${index + 1}. ${status}${evidence.length > 0 ? `: ${evidence.join('; ')}` : ''}`;
     });
 
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Assigned inside the activity-mapping callback.
   if (!hasDescribableEvidence) {
     return '';
   }

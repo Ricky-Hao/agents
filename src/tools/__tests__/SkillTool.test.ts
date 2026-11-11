@@ -178,7 +178,11 @@ describe('SkillTool', () => {
       // Injected messages come AFTER
       const second = messages[1] as HumanMessage;
       expect(second).toBeInstanceOf(HumanMessage);
-      expect(second.content).toBe('Injected skill body content');
+      expect(second.content).toBe(
+        '[Skill source {"name":"test-skill","id":null,"version":"unknown"}]\n' +
+          'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n' +
+          'Injected skill body content\n[End skill source]'
+      );
       expect(second.additional_kwargs.role).toBe('user');
       expect(second.additional_kwargs.isMeta).toBe(true);
       expect(second.additional_kwargs.source).toBe('skill');
@@ -324,9 +328,17 @@ describe('SkillTool', () => {
       expect(messages[1]._getType()).toBe('tool');
       // Injected messages come after all ToolMessages
       expect(messages[2]).toBeInstanceOf(HumanMessage);
-      expect((messages[2] as HumanMessage).content).toBe('Injected from A');
+      expect((messages[2] as HumanMessage).content).toBe(
+        '[Skill source {"name":"skill-a","id":null,"version":"unknown"}]\n' +
+          'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n' +
+          'Injected from A\n[End skill source]'
+      );
       expect(messages[3]).toBeInstanceOf(HumanMessage);
-      expect((messages[3] as HumanMessage).content).toBe('Injected from B');
+      expect((messages[3] as HumanMessage).content).toBe(
+        '[Skill source {"name":"skill-b","id":null,"version":"unknown"}]\n' +
+          'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n' +
+          'Injected from B\n[End skill source]'
+      );
     });
 
     it('handles mixed mode: direct tools + event-driven with injected messages', async () => {
@@ -390,7 +402,11 @@ describe('SkillTool', () => {
       // Injected message last
       const last = messages[messages.length - 1] as HumanMessage;
       expect(last).toBeInstanceOf(HumanMessage);
-      expect(last.content).toBe('Skill body from event tool');
+      expect(last.content).toBe(
+        '[Skill source {"name":"my-skill","id":null,"version":"unknown"}]\n' +
+          'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n' +
+          'Skill body from event tool\n[End skill source]'
+      );
       expect(last.additional_kwargs.skillName).toBe('my-skill');
     });
 
@@ -435,7 +451,11 @@ describe('SkillTool', () => {
       // Injected message still included
       const injected = messages[1] as HumanMessage;
       expect(injected).toBeInstanceOf(HumanMessage);
-      expect(injected.content).toBe('Partial context before failure');
+      expect(injected.content).toBe(
+        '[Skill source {"name":"broken-skill","id":null,"version":"unknown"}]\n' +
+          'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n' +
+          'Partial context before failure\n[End skill source]'
+      );
       expect(injected.additional_kwargs.skillName).toBe('broken-skill');
     });
   });

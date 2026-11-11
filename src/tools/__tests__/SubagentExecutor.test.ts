@@ -32,6 +32,7 @@ import { sanitizeForwardedSubagentUpdateData } from '../subagent/SubagentExecuto
 import { SUBAGENT_PARENT_BATCH_CONFIG_KEY } from '../subagent/SubagentReplay';
 import { Constants, Providers, GraphEvents, StepTypes } from '@/common';
 import { StreamLimitExceededError } from '@/llm/streamLimits';
+import { TOOL_REPLAY_CONFIGS_KEY } from '../toolBatchReplay';
 import { stableStringify } from '../eagerEventExecution';
 import { AgentContext } from '@/agents/AgentContext';
 import { HookRegistry } from '@/hooks/HookRegistry';
@@ -58,6 +59,13 @@ const makeConfig = (
   agentInputs: makeChildInputs(),
   ...overrides,
 });
+
+const makeAgentContexts = ({
+  agents,
+}: StandardGraphInput): Map<string, AgentContext> =>
+  new Map(
+    agents.map((agent) => [agent.agentId, AgentContext.fromConfig(agent)])
+  );
 
 describe('filterSubagentResult', () => {
   it('treats a result member with no new AI message as textless completion', () => {
@@ -766,7 +774,11 @@ describe('SubagentExecutor', () => {
     const hooks = new HookRegistry();
     hooks.register('SubagentStart', {
       internal: true,
-      hooks: [async () => { throw new Error('authorization unavailable'); }],
+      hooks: [
+        async () => {
+          throw new Error('authorization unavailable');
+        },
+      ],
     });
     const createChildGraph = jest.fn(makeNoopGraphFactory());
     const executor = createExecutor({
@@ -783,10 +795,14 @@ describe('SubagentExecutor', () => {
         parentToolCallId: 'call_start_policy_failure',
       })
     ) as { background_task_id: string };
-    await waitForTask(store, response.background_task_id, (status) => status === 'error');
-    expect(store.get('owner:conversation', response.background_task_id)?.error).toContain(
-      'Subagent start policy could not be evaluated'
+    await waitForTask(
+      store,
+      response.background_task_id,
+      (status) => status === 'error'
     );
+    expect(
+      store.get('owner:conversation', response.background_task_id)?.error
+    ).toContain('Subagent start policy could not be evaluated');
     expect(createChildGraph).toHaveBeenCalledTimes(1);
   });
 
@@ -984,8 +1000,9 @@ describe('SubagentExecutor', () => {
           return { content: `${result.content} delivered` };
         },
       },
-      createChildGraph: (): StandardGraph =>
+      createChildGraph: (input): StandardGraph =>
         ({
+          agentContexts: makeAgentContexts(input),
           createWorkflow: () => ({ invoke }),
           clearHeavyState: jest.fn(),
         }) as unknown as StandardGraph,
@@ -1028,8 +1045,9 @@ describe('SubagentExecutor', () => {
     const executor = createExecutor({
       taskConfig: { store, scopeId: 'owner:conversation' },
       subagentContext: { prepare: async () => ({}), complete },
-      createChildGraph: (): StandardGraph =>
+      createChildGraph: (input): StandardGraph =>
         ({
+          agentContexts: makeAgentContexts(input),
           createWorkflow: () => ({ invoke }),
           clearHeavyState: jest.fn(),
         }) as unknown as StandardGraph,
@@ -1822,7 +1840,7 @@ describe('SubagentExecutor', () => {
     expect(result.messages).toEqual([]);
   });
 
-  it('fails graph HITL before factories, hooks, events, or usage can run', async () => {
+  it('requires a parent call ID for graph HITL before factories, hooks, events, or usage can run', async () => {
     const graphConfig: GraphSubagentConfig = {
       kind: 'graph',
       type: 'graph-team',
@@ -1862,13 +1880,58 @@ describe('SubagentExecutor', () => {
     });
 
     expect(result.content).toBe(
-      'Error: Human-in-the-loop execution is not yet supported for graph subagents.'
+      'Error: Resumable subagent execution requires a parent tool call ID.'
     );
     expect(createChildGraph).not.toHaveBeenCalled();
     expect(createChildGraphByKind).not.toHaveBeenCalled();
     expect(hook).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
     expect(usageSink).not.toHaveBeenCalled();
+  });
+
+  it('retains the designated graph result when recovering an already completed child checkpoint', async () => {
+    const graphConfig: GraphSubagentConfig = {
+      kind: 'graph',
+      type: 'recovered-team',
+      name: 'Recovered',
+      description: 'Already completed',
+      agents: [makeChildInputs('entry'), makeChildInputs('result')],
+      edges: [{ from: 'entry', to: 'result', edgeType: 'direct' }],
+      entryAgentId: 'entry',
+      resultAgentId: 'result',
+    };
+    const finalMessage = new AIMessage('Designated graph result');
+    const invoke = jest.fn();
+    const updateState = jest.fn().mockResolvedValue({});
+    const executor = createExecutor({
+      configs: new Map([[graphConfig.type, graphConfig]]),
+      humanInTheLoop: { enabled: true },
+      createChildGraphByKind: () =>
+        ({
+          createWorkflow: () => ({
+            getState: jest.fn().mockResolvedValue({
+              values: {
+                messages: [new AIMessage('Worker output'), finalMessage],
+                subagentResult: { agentId: 'result', message: finalMessage },
+              },
+              next: [],
+              tasks: [],
+            }),
+            invoke,
+            updateState,
+          }),
+          clearHeavyState: jest.fn(),
+        }) as unknown as StandardGraph,
+    });
+    const result = await executor.execute({
+      description: 'Recover the team',
+      subagentType: graphConfig.type,
+      threadId: 'recovered-team-thread',
+      parentToolCallId: 'recovered-spawn',
+    });
+    expect(result.content).toBe('Designated graph result');
+    expect(invoke).not.toHaveBeenCalled();
+    expect(updateState).toHaveBeenCalled();
   });
 
   it('fails closed when resumable execution has no parent tool call ID', async () => {
@@ -2122,7 +2185,7 @@ describe('SubagentExecutor', () => {
     ).rejects.toBeInstanceOf(StreamLimitExceededError);
   });
 
-  it('closes child steps as \'failed\' when the child trips its own stream limit', async () => {
+  it("closes child steps as 'failed' when the child trips its own stream limit", async () => {
     /**
      * The closure sweep runs AFTER the catch block self-aborts the child
      * breaker, so deriving the status from the live signal relabels the
@@ -2160,7 +2223,7 @@ describe('SubagentExecutor', () => {
     );
   });
 
-  it('closes child steps as \'cancelled\' when the abort preceded the error', async () => {
+  it("closes child steps as 'cancelled' when the abort preceded the error", async () => {
     /** The counterpart bound: a child that dies BECAUSE it was already
      * aborted (caller abort, sibling breaker trip) is an intentional stop,
      * and must keep reading as 'cancelled' under the snapshot. */
@@ -2424,8 +2487,8 @@ describe('SubagentExecutor', () => {
         content: 'ok',
         ...(usage
           ? {
-            usage_metadata: usage as unknown as AIMessage['usage_metadata'],
-          }
+              usage_metadata: usage as unknown as AIMessage['usage_metadata'],
+            }
           : {}),
       }),
     });
@@ -3170,8 +3233,9 @@ describe('SubagentExecutor', () => {
       configs: new Map([[hitlConfig.type, hitlConfig]]),
       humanInTheLoop: { enabled: true },
       checkpointer: new MemorySaver(),
-      createChildGraph: (): StandardGraph =>
+      createChildGraph: (input): StandardGraph =>
         ({
+          agentContexts: makeAgentContexts(input),
           sessions: childSessions,
           createWorkflow: () => ({
             getState: jest.fn().mockResolvedValue({
@@ -3363,6 +3427,7 @@ describe('SubagentExecutor', () => {
           checkpoint_map: { parent: 'checkpoint' },
           checkpoint_ns: 'parent-checkpoint-ns',
           [SUBAGENT_PARENT_BATCH_CONFIG_KEY]: 'assistant-batch',
+          [TOOL_REPLAY_CONFIGS_KEY]: new Map([['foreign-owner', {}]]),
           requestBody: { messageId: 'msg-1' },
           thread_id: 'parent-thread',
           user: { id: 'user_abc' },
@@ -3380,6 +3445,7 @@ describe('SubagentExecutor', () => {
       expect(configurable.checkpoint_map).toBeUndefined();
       expect(configurable.checkpoint_ns).toBeUndefined();
       expect(configurable[SUBAGENT_PARENT_BATCH_CONFIG_KEY]).toBeUndefined();
+      expect(configurable[TOOL_REPLAY_CONFIGS_KEY]).toBeUndefined();
       expect(configurable.requestBody).toEqual({ messageId: 'msg-1' });
       expect(configurable.thread_id).toBe('parent-thread');
       expect(configurable.user).toEqual({ id: 'user_abc' });
@@ -4175,16 +4241,29 @@ describe('SubagentExecutor', () => {
       });
       const childEvent = {
         dispatched_at: 1_200,
-        toolCalls: [{ id: 'child_call', name: 'search', stepId: 'child_step', args: { secret: 'never' } }],
+        toolCalls: [
+          {
+            id: 'child_call',
+            name: 'search',
+            stepId: 'child_step',
+            args: { secret: 'never' },
+          },
+        ],
       };
       const factory: () => StandardGraph = (): StandardGraph =>
         ({
           createWorkflow: (): { invoke: jest.Mock } => ({
             invoke: jest.fn().mockImplementation(async (_state, options) => {
               const forwarder = options.callbacks[0] as {
-                handleCustomEvent: (event: string, data: unknown) => Promise<void>;
+                handleCustomEvent: (
+                  event: string,
+                  data: unknown
+                ) => Promise<void>;
               };
-              await forwarder.handleCustomEvent(GraphEvents.ON_TOOL_CALLS_DISPATCHED, childEvent);
+              await forwarder.handleCustomEvent(
+                GraphEvents.ON_TOOL_CALLS_DISPATCHED,
+                childEvent
+              );
               return { messages: [new AIMessage('ok')] };
             }),
           }),
@@ -4194,13 +4273,21 @@ describe('SubagentExecutor', () => {
         createChildGraph: factory,
         parentHandlerRegistry: registry,
       });
-      await executor.execute({ description: 'Task', subagentType: 'researcher' });
-      expect(updates).toContainEqual(expect.objectContaining({
-        phase: 'tool_calls_dispatched',
-        data: { dispatched_at: 1_200, toolCalls: [
-          { id: 'child_call', name: 'search', stepId: 'child_step' },
-        ] },
-      }));
+      await executor.execute({
+        description: 'Task',
+        subagentType: 'researcher',
+      });
+      expect(updates).toContainEqual(
+        expect.objectContaining({
+          phase: 'tool_calls_dispatched',
+          data: {
+            dispatched_at: 1_200,
+            toolCalls: [
+              { id: 'child_call', name: 'search', stepId: 'child_step' },
+            ],
+          },
+        })
+      );
     });
 
     it('routes child ON_TOOL_EXECUTE dispatches through the parent registry', async () => {

@@ -32,6 +32,7 @@ import {
 import {
   INTENT_PROPERTY,
   PROGRAMMATIC_TOOL_INPUT,
+  PROGRAMMATIC_TOOL_CALL_ID,
   inspectToolInputSchema,
   stripIntentForInvoke,
 } from '@/tools/intentArg';
@@ -64,8 +65,7 @@ config();
 const DEFAULT_MAX_ROUND_TRIPS = 20;
 
 const DEFAULT_RUN_TIMEOUT_MS = resolveCodeApiRunTimeoutMs();
-const CODE_API_PROGRAMMATIC_REQUEST_HEADER =
-  'X-LibreChat-Code-Request-ID';
+const CODE_API_PROGRAMMATIC_REQUEST_HEADER = 'X-LibreChat-Code-Request-ID';
 const CANCELLATION_REQUEST_TIMEOUT_MS = 2_000;
 
 // ============================================================================
@@ -716,6 +716,9 @@ export async function executeTools(
       Object.defineProperty(invokeConfig, PROGRAMMATIC_TOOL_INPUT, {
         value: call.input,
       });
+      Object.defineProperty(invokeConfig, PROGRAMMATIC_TOOL_CALL_ID, {
+        value: call.id,
+      });
       const result = await tool.invoke(
         stripIntentForInvoke(normalizeToolInput(call.input, tool), tool),
         invokeConfig
@@ -800,9 +803,9 @@ export function formatCompletedResponse(
         : {}),
       ...(response.runtime_session_id != null
         ? {
-          runtime_session_id: response.runtime_session_id,
-          runtime_status: response.runtime_status,
-        }
+            runtime_session_id: response.runtime_session_id,
+            runtime_status: response.runtime_status,
+          }
         : {}),
     } satisfies t.ProgrammaticExecutionArtifact,
   ];

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { z as z4 } from 'zod/v4';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { GenericTool } from '@/types';
@@ -18,6 +18,8 @@ describe('executor schema inspection safety', () => {
     'properties',
     'shape',
     '_def',
+    '_zod',
+    'def',
     'options',
     'iterator',
     'proxy',
@@ -57,6 +59,10 @@ describe('executor schema inspection safety', () => {
               get: getter,
             });
             Object.defineProperty(tool, 'constructor', { value: constructor });
+          } else if (probe === 'def') {
+            Object.defineProperty(schema, '_zod', {
+              value: Object.defineProperty({}, 'def', { get: getter }),
+            });
           } else if (probe === 'options') {
             Object.defineProperty(schema, '_def', {
               value: Object.defineProperty({}, 'options', { get: getter }),
@@ -169,6 +175,16 @@ describe('executor schema inspection safety', () => {
       error_message: 'Tool input schema could not be inspected safely.',
     });
     expect(body).not.toHaveBeenCalled();
+  });
+
+  it('inspects Zod 4 without reading the legacy definition getter', () => {
+    const schema = z4.object({ id: z4.string() }).strict();
+    const getter = jest.fn(() => {
+      throw new Error(secret);
+    });
+    Object.defineProperty(schema, '_def', { get: getter });
+    expect(stripIntentForInvoke(input, { schema })).toEqual({ id: 'agent' });
+    expect(getter).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

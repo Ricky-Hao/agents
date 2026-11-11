@@ -55,12 +55,12 @@ function getFetch(config: CloudflareBridgeRuntimeConfig): typeof fetch {
 
 function quote(value: string): string {
   if (value === '') {
-    return '\'\'';
+    return "''";
   }
   if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
     return value;
   }
-  return `'${value.replace(/'/g, '\'\\\'\'')}'`;
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 function encodeBridgePath(filePath: string): string {
@@ -90,14 +90,14 @@ function toSandboxPath(filePath: string, workspaceRoot: string): string {
 
 function typeFromFind(value: string): t.CloudflareSandboxFileInfo['type'] {
   switch (value) {
-  case 'd':
-    return 'directory';
-  case 'l':
-    return 'symlink';
-  case 'f':
-    return 'file';
-  default:
-    return 'other';
+    case 'd':
+      return 'directory';
+    case 'l':
+      return 'symlink';
+    case 'f':
+      return 'file';
+    default:
+      return 'other';
   }
 }
 
@@ -157,7 +157,7 @@ function commandWithEnv(
 
 async function collectReadableStream(
   stream: ReadableStream<Uint8Array>
-): Promise<Uint8Array> {
+): Promise<ReturnType<typeof Uint8Array.from>> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -183,7 +183,7 @@ async function collectReadableStream(
 async function normalizeWriteBody(
   content: string | ReadableStream<Uint8Array>,
   options?: { encoding?: string }
-): Promise<Uint8Array> {
+): Promise<ReturnType<typeof Uint8Array.from>> {
   if (typeof content !== 'string') {
     return collectReadableStream(content);
   }
@@ -431,12 +431,12 @@ export function createCloudflareBridgeRuntime(
     const resolvedPath = toSandboxPath(filePath, workspaceRoot);
     const maxDepth = options?.recursive === true ? '' : '-maxdepth 1';
     const hiddenFilter =
-      options?.includeHidden === true ? '' : ' \\( -name \'.*\' -prune \\) -o';
+      options?.includeHidden === true ? '' : " \\( -name '.*' -prune \\) -o";
     const quotedPath = quote(resolvedPath);
     const command =
       `[ -d ${quotedPath} ] || { printf '%s is not a directory\\n' ${quotedPath} >&2; exit 20; }; ` +
       `find ${quotedPath} -mindepth 1 ${maxDepth}${hiddenFilter} ` +
-      '-printf \'%y\\t%s\\t%p\\n\'';
+      "-printf '%y\\t%s\\t%p\\n'";
     const result = await exec(command, { cwd: workspaceRoot });
     if (result.exitCode !== 0) {
       throw new Error(result.stderr || `listFiles failed for ${resolvedPath}`);

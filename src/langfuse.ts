@@ -1,13 +1,13 @@
 import { tool } from '@langchain/core/tools';
 import { CallbackHandler } from '@langfuse/langchain';
 import { LangfuseOtelContextKeys } from '@langfuse/core';
+import { isGraphInterrupt, isParentCommand } from '@langchain/langgraph';
+import { context as otelContext, trace as otelTrace } from '@opentelemetry/api';
 import {
   AIMessage,
   HumanMessage,
   AIMessageChunk,
 } from '@langchain/core/messages';
-import { isGraphInterrupt, isParentCommand } from '@langchain/langgraph';
-import { context as otelContext, trace as otelTrace } from '@opentelemetry/api';
 import {
   getLangfuseTracerProvider,
   propagateAttributes,
@@ -207,8 +207,29 @@ function normalizeGenerationForLangfuse(generation: Generation): Generation {
     return generation;
   }
 
-  const usageMetadata = getLangfuseBedrockUsage(message);
-  if (usageMetadata == null || usageMetadata === message.usage_metadata) {
+  let usageMetadata = getLangfuseBedrockUsage(message);
+  if (usageMetadata == null) {
+    return generation;
+  }
+  const details:
+    | (NonNullable<UsageMetadata['input_token_details']> & {
+        cache_creation_30m?: number;
+        cache_creation_12h?: number;
+      })
+    | undefined = usageMetadata.input_token_details;
+  if (
+    details?.cache_creation != null &&
+    (details.cache_creation_30m != null || details.cache_creation_12h != null)
+  ) {
+    // Langfuse subtracts every detail from input; TTL subsets overlap the aggregate.
+    const {
+      cache_creation_30m: _halfHour,
+      cache_creation_12h: _twelveHour,
+      ...disjointDetails
+    } = details;
+    usageMetadata = { ...usageMetadata, input_token_details: disjointDetails };
+  }
+  if (usageMetadata === message.usage_metadata) {
     return generation;
   }
 
@@ -350,10 +371,10 @@ class ScopedLangfuseCallbackHandler extends CallbackHandler {
       ...handlerParams,
       ...(inheritTraceIdentity === true
         ? {
-          userId: undefined,
-          sessionId: undefined,
-          traceMetadata: undefined,
-        }
+            userId: undefined,
+            sessionId: undefined,
+            traceMetadata: undefined,
+          }
         : {}),
     });
     this.langfuse = langfuse;
@@ -492,9 +513,9 @@ class ScopedLangfuseCallbackHandler extends CallbackHandler {
       : currentContext;
     const activeContext = isDetachedRun
       ? detachForeignAmbientSpan(
-        parentedContext,
-        resolveLangfuseDestinationKey(langfuse)
-      )
+          parentedContext,
+          resolveLangfuseDestinationKey(langfuse)
+        )
       : parentedContext;
     const scoped = (): T =>
       withLangfuseRuntimeScope(
@@ -555,9 +576,9 @@ class ScopedLangfuseCallbackHandler extends CallbackHandler {
     return otelContext.with(cleanContext, () =>
       hasIdentity
         ? propagateAttributes(
-          { userId, sessionId, tags, metadata, traceName },
-          scoped
-        )
+            { userId, sessionId, tags, metadata, traceName },
+            scoped
+          )
         : scoped()
     );
   }

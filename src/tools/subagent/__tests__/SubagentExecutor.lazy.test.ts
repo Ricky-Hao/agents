@@ -2018,30 +2018,41 @@ describe('SubagentExecutor lazy selected-subagent resolution', () => {
   });
 
   it.each([
-    { label: 'stream limit', trip: new StreamLimitExceededError({ kind: 'tool_call_args', limit: 10, observed: 11, toolName: 'db_query' }) },
+    {
+      label: 'stream limit',
+      trip: new StreamLimitExceededError({
+        kind: 'tool_call_args',
+        limit: 10,
+        observed: 11,
+        toolName: 'db_query',
+      }),
+    },
     { label: 'protection', trip: new ProviderTextProtectionError('blocked') },
-  ])('rethrows a $label trip while awaiting lazy resolution', async ({ trip }) => {
-    const breaker = new AbortController();
-    let markResolutionStarted = (): void => undefined;
-    const resolutionStarted = new Promise<void>((resolve) => {
-      markResolutionStarted = resolve;
-    });
-    const config = makeLazyConfig('researcher', async () => {
-      markResolutionStarted();
-      return new Promise<AgentInputs>(() => undefined);
-    });
-    const executor = createExecutor([config]);
-    const execution = executor.execute({
-      description: 'Stop this selection.',
-      subagentType: config.type,
-      parentToolCallId: 'call_limit',
-      breaker,
-    });
-    await resolutionStarted;
-    breaker.abort(trip);
+  ])(
+    'rethrows a $label trip while awaiting lazy resolution',
+    async ({ trip }) => {
+      const breaker = new AbortController();
+      let markResolutionStarted = (): void => undefined;
+      const resolutionStarted = new Promise<void>((resolve) => {
+        markResolutionStarted = resolve;
+      });
+      const config = makeLazyConfig('researcher', async () => {
+        markResolutionStarted();
+        return new Promise<AgentInputs>(() => undefined);
+      });
+      const executor = createExecutor([config]);
+      const execution = executor.execute({
+        description: 'Stop this selection.',
+        subagentType: config.type,
+        parentToolCallId: 'call_limit',
+        breaker,
+      });
+      await resolutionStarted;
+      breaker.abort(trip);
 
-    await expect(execution).rejects.toBe(trip);
-  });
+      await expect(execution).rejects.toBe(trip);
+    }
+  );
 
   it('prefers eager agent inputs without calling an attached resolver', async () => {
     const resolveAgentInputs = jest.fn(async () => makeAgent('unexpected'));
@@ -3101,7 +3112,7 @@ describe('SubagentExecutor lazy selected-subagent resolution', () => {
     };
 
     await expect(initializeAndExecute()).rejects.toThrow(
-      /lazy fields configId\/resolveAgentInputs/
+      /lazy fields resolveAgentInputs/
     );
     expect(resolveAgentInputs).not.toHaveBeenCalled();
     expect(createChildGraph).not.toHaveBeenCalled();

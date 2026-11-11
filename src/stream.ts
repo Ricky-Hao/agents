@@ -720,11 +720,11 @@ function createEagerToolExecutionPlan(args: {
 
   const unstartedToolCalls = skipExisting
     ? toolCalls.filter((toolCall) => {
-      if (toolCall.id == null || toolCall.id === '') {
-        return true;
-      }
-      return !graph.eagerEventToolExecutions.has(toolCall.id);
-    })
+        if (toolCall.id == null || toolCall.id === '') {
+          return true;
+        }
+        return !graph.eagerEventToolExecutions.has(toolCall.id);
+      })
     : toolCalls;
   // Drop host-excluded tools only AFTER the batch-level guards above have run
   // against the full batch, so excluding a call never hides a sibling direct
@@ -1137,8 +1137,8 @@ function recordEagerToolCallChunks(args: {
     const existing =
       previous == null || shouldReset
         ? {
-          argsText: '',
-        }
+            argsText: '',
+          }
         : previous;
     const id = incomingId ?? existing.id;
     const name = incomingName ?? existing.name;
@@ -1797,6 +1797,7 @@ export class ChatModelStreamHandler implements t.EventHandler {
       return;
     }
     throwIfRunBreakerTripped();
+    if (metadata?.summarization === true) return;
 
     const agentContext = graph.getAgentContext(metadata);
 
@@ -2472,7 +2473,7 @@ export function createContentAggregator(): t.ContentAggregatorResult {
     finalUpdate = false
   ): void => {
     if (!contentPart) {
-      console.warn('No content part found in \'updateContent\'');
+      console.warn("No content part found in 'updateContent'");
       return;
     }
     const partType = contentPart.type ?? '';
