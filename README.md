@@ -214,6 +214,7 @@ npx eslint src/
 
 - [Multi-agent patterns](./docs/multi-agent-patterns.md)
 - [Summarization behavior](./docs/summarization-behavior.md)
+- [Fork consumer migration](./docs/sdk-consumer-migration.md)
 
 ## License
 

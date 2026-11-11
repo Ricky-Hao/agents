@@ -1601,6 +1601,59 @@ describe('JsonlSessionStore', () => {
     expect(summary?.data.tokenCount).toBeGreaterThan(0);
   });
 
+  it.each(['oversized_input', 'provider_failure', 'empty_output'] as const)(
+    'does not re-commit a prior summary after %s',
+    async (failure) => {
+      const invoke =
+        failure === 'provider_failure'
+          ? jest.fn().mockRejectedValue(new Error('provider failure'))
+          : jest.fn().mockResolvedValue({ content: '' });
+      jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
+        class {
+          constructor() {
+            return { invoke };
+          }
+        } as never
+      );
+      const session = await createAgentSession({
+        cwd: dir,
+        runId: 'failed-compaction',
+        tokenCounter: (message) => JSON.stringify(message.content).length,
+        graphConfig: {
+          type: 'standard',
+          llmConfig: { provider: 'openAI' as never, model: 'test-model' },
+          instructions: 'test',
+          maxContextTokens: failure === 'oversized_input' ? 300 : 10_000,
+          summarizationConfig: {
+            prompt: 'Write a checkpoint.',
+            maxSummaryTokens: 64,
+          },
+        },
+      });
+      const store = session.getSessionStore()!;
+      const old = await store.appendMessage(new HumanMessage('old work'));
+      const previous = await store.appendEntryForCompaction({
+        text: 'previous checkpoint',
+        tokenCount: 20,
+        retainedEntryIds: [],
+        summarizedEntryIds: [old.id],
+      });
+      await store.appendMessage(
+        new HumanMessage('new work '.repeat(200)),
+        previous.id
+      );
+      const beforeMessages = JSON.stringify(store.getMessages());
+      const beforeEntries = store.getEntries().length;
+      const compacted = await session.compact({ retainRecentTurns: 0 });
+      expect(compacted).toBeUndefined();
+      expect(store.getEntries()).toHaveLength(beforeEntries);
+      expect(JSON.stringify(store.getMessages())).toBe(beforeMessages);
+      expect(invoke).toHaveBeenCalledTimes(
+        failure === 'oversized_input' ? 0 : 1
+      );
+    }
+  );
+
   it('records no retained ids when compaction retains zero messages', async () => {
     mockSummarizer('summary of everything');
     const session = await createAgentSession({

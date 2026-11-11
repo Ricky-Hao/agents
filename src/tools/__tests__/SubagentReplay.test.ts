@@ -1,3 +1,12 @@
+import { ToolMessage } from '@langchain/core/messages';
+import type { RunStepResumeState } from '@/types';
+import {
+  attachToolBatchReplayState,
+  getPublicToolInterruptPayload,
+  restoreToolBatchReplayState,
+  restoreToolReplayConfig,
+  TOOL_BATCH_REPLAY_KEY,
+} from '@/tools/toolBatchReplay';
 import {
   getSubagentResumeManifest,
   attachSubagentResumeManifest,
@@ -9,15 +18,6 @@ import {
   getRunStepResumeState,
   stripRunStepResumeState,
 } from '@/tools/runStepResume';
-import type { RunStepResumeState } from '@/types';
-import { ToolMessage } from '@langchain/core/messages';
-import {
-  attachToolBatchReplayState,
-  getPublicToolInterruptPayload,
-  restoreToolBatchReplayState,
-  restoreToolReplayConfig,
-  TOOL_BATCH_REPLAY_KEY,
-} from '@/tools/toolBatchReplay';
 
 describe('SubagentReplay manifest', () => {
   const execution = {
@@ -83,6 +83,123 @@ describe('SubagentReplay manifest', () => {
       },
     ],
   };
+
+  it('round-trips optional pending child interrupt IDs and accepts older snapshots', () => {
+    const snapshot = attachSubagentResumeManifest(
+      {},
+      {
+        version: 1,
+        executions: [
+          {
+            ...execution,
+            pendingInterruptIds: ['left-interrupt', 'right-interrupt'],
+          },
+        ],
+      }
+    );
+    expect(
+      getSubagentResumeManifest(JSON.parse(JSON.stringify(snapshot)))
+        ?.executions[0].pendingInterruptIds
+    ).toEqual(['left-interrupt', 'right-interrupt']);
+    expect(
+      getSubagentResumeManifest(
+        attachSubagentResumeManifest(
+          {},
+          { version: 1, executions: [execution] }
+        )
+      )?.executions[0].pendingInterruptIds
+    ).toBeUndefined();
+  });
+
+  it('round-trips pending public proposal pairs without requiring them in older snapshots', () => {
+    const pendingInterrupts = [
+      {
+        interruptId: 'left',
+        payload: {
+          type: 'tool_approval',
+          action_requests: [],
+          review_configs: [],
+        },
+      },
+      { interruptId: 'right', payload: null },
+    ];
+    const snapshot = attachSubagentResumeManifest(
+      {},
+      {
+        version: 1,
+        executions: [
+          {
+            ...execution,
+            pendingInterruptIds: ['left', 'right'],
+            pendingInterrupts,
+          },
+        ],
+      }
+    );
+    expect(
+      getSubagentResumeManifest(JSON.parse(JSON.stringify(snapshot)))
+        ?.executions[0].pendingInterrupts
+    ).toEqual(pendingInterrupts);
+    expect(
+      getSubagentResumeManifest(
+        attachSubagentResumeManifest(
+          {},
+          { version: 1, executions: [execution] }
+        )
+      )?.executions[0].pendingInterrupts
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { pendingInterrupts: 'invalid' },
+    { pendingInterrupts: [null] },
+    { pendingInterrupts: [{ interruptId: '', payload: null }] },
+    { pendingInterrupts: [{ interruptId: 'left' }] },
+    {
+      pendingInterrupts: [
+        { interruptId: 'left', payload: null },
+        { interruptId: 'left', payload: null },
+      ],
+    },
+    {
+      pendingInterruptIds: ['right'],
+      pendingInterrupts: [{ interruptId: 'left', payload: null }],
+    },
+    {
+      pendingInterruptIds: 42,
+      pendingInterrupts: [{ interruptId: 'left', payload: null }],
+    },
+  ])(
+    'rejects malformed or contradictory pending proposal pairs: %j',
+    (pending) => {
+      const snapshot = {
+        __librechat_subagent_resume_manifest: {
+          version: 1,
+          executions: [{ ...execution, ...pending }],
+        },
+      };
+      expect(getSubagentResumeManifest(snapshot)).toBeUndefined();
+      expect(() => requireValidSubagentResumeManifest(snapshot)).toThrow(
+        'Invalid subagent resume manifest'
+      );
+    }
+  );
+
+  it.each(['not-an-array', [''], [4], ['repeated', 'repeated']])(
+    'rejects malformed pending interrupt identities: %j',
+    (pendingInterruptIds) => {
+      const snapshot = {
+        __librechat_subagent_resume_manifest: {
+          version: 1,
+          executions: [{ ...execution, pendingInterruptIds }],
+        },
+      };
+      expect(getSubagentResumeManifest(snapshot)).toBeUndefined();
+      expect(() => requireValidSubagentResumeManifest(snapshot)).toThrow(
+        'Invalid subagent resume manifest'
+      );
+    }
+  );
 
   it.each([null, 'confirm', ['a', 'b']])(
     'preserves nested custom payload %j with parent replay state',

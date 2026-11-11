@@ -567,7 +567,7 @@ describe('createSummarizeNode', () => {
     );
   });
 
-  it('preserves history when all LLM attempts fail', async () => {
+  it('preserves history without committing metadata when all LLM attempts fail', async () => {
     const events = captureEvents();
 
     jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
@@ -582,14 +582,7 @@ describe('createSummarizeNode', () => {
 
     const setSummary = jest.fn();
     const agentContext = createAgentContext({ setSummary } as never);
-    const graph = mockGraph((_stepId, result) => {
-      if (result.type === 'summary') {
-        events.push({
-          event: GraphEvents.ON_SUMMARIZE_COMPLETE,
-          data: { summary: result.summary },
-        });
-      }
-    });
+    const graph = mockGraph();
     const node = createSummarizeNode({
       agentContext,
       graph,
@@ -610,27 +603,19 @@ describe('createSummarizeNode', () => {
     expect(result.summarizationRequest).toBeUndefined();
     expect(result.messages).toBeUndefined();
     expect(setSummary).not.toHaveBeenCalled();
+    expect(agentContext.hasSummary()).toBe(false);
     const completeEvent = events.find(
-      (e) => e.event === GraphEvents.ON_SUMMARIZE_COMPLETE
-    );
-    expect(
-      (completeEvent?.data as t.SummarizeCompleteEvent).summary
-    ).toBeUndefined();
-    expect((completeEvent?.data as t.SummarizeCompleteEvent).error).toContain(
-      'history was preserved'
-    );
+      (event) => event.event === GraphEvents.ON_SUMMARIZE_COMPLETE
+    )?.data as t.SummarizeCompleteEvent;
+    expect(completeEvent.summary).toBeUndefined();
+    expect(completeEvent.error).toMatch(/history was preserved/);
+    expect(completeEvent.errorCode).toBe('unknown');
+    expect(JSON.stringify(completeEvent)).not.toContain('Model error');
   });
 
-  it('catches model initialization errors and falls back to metadata stub', async () => {
+  it('preserves history when model initialization fails', async () => {
     captureEvents();
 
-    /**
-     * Simulate the "Unsupported LLM provider" case — e.g. when a caller
-     * forwards an unrecognized provider name (custom-endpoint label) that
-     * getChatModelClass cannot resolve. Prior to the defense-in-depth fix,
-     * this error was thrown outside the try/catch in executeSummarizationWithFallback
-     * and bubbled up silently. Now it is caught and the metadata stub is used.
-     */
     jest.spyOn(providers, 'getChatModelClass').mockImplementation(() => {
       throw new Error('Unsupported LLM provider: Ollama');
     });
@@ -644,23 +629,23 @@ describe('createSummarizeNode', () => {
       generateStepId,
     });
 
-    await expect(
-      node(
-        {
-          messages: [new HumanMessage('Test message')],
-          summarizationRequest: {
-            remainingContextTokens: 1000,
-            agentId: 'agent_0',
-          },
+    const result = await node(
+      {
+        messages: [new HumanMessage('Test message')],
+        summarizationRequest: {
+          remainingContextTokens: 1000,
+          agentId: 'agent_0',
         },
-        {} as RunnableConfig
-      )
-    ).resolves.not.toThrow();
+      },
+      {} as RunnableConfig
+    );
 
+    expect(result.messages).toBeUndefined();
+    expect(result.summarizationRequest).toBeUndefined();
     expect(setSummary).not.toHaveBeenCalled();
   });
 
-  it('falls back to metadata stub when primary LLM call fails', async () => {
+  it('preserves history when the primary LLM call fails without a fallback', async () => {
     captureEvents();
 
     jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
@@ -682,7 +667,7 @@ describe('createSummarizeNode', () => {
       generateStepId,
     });
 
-    await node(
+    const result = await node(
       {
         messages: [new HumanMessage('Test message')],
         summarizationRequest: {
@@ -693,7 +678,10 @@ describe('createSummarizeNode', () => {
       {} as RunnableConfig
     );
 
+    expect(result.messages).toBeUndefined();
+    expect(result.summarizationRequest).toBeUndefined();
     expect(setSummary).not.toHaveBeenCalled();
+    expect(agentContext.hasSummary()).toBe(false);
   });
 
   it('calls setSummary with the final text', async () => {
@@ -733,7 +721,7 @@ describe('createSummarizeNode', () => {
     );
   });
 
-  it('cache-hit path sends raw messages with instruction appended as final HumanMessage', async () => {
+  it('cache-hit path sends the system prompt and full window before the final instruction', async () => {
     captureEvents();
 
     const capturedMessages: Array<{ type: string; content: string }> = [];
@@ -790,16 +778,13 @@ describe('createSummarizeNode', () => {
       {} as RunnableConfig
     );
 
-    // The raw messages should be sent + instruction appended as the last HumanMessage
-    // messagesToRefine has 3 HumanMessages, instruction adds 1 more
-    expect(capturedMessages.length).toBe(4);
-    expect(capturedMessages[0].type).toBe('human');
-    expect(capturedMessages[0].content).toBe('Message 1');
-    expect(capturedMessages[3].type).toBe('human');
-    // The last message should contain the summarization prompt
-    expect(capturedMessages[3].content).toContain(
-      'context window is filling up'
-    );
+    expect(capturedMessages).toEqual([
+      { type: 'system', content: 'Test agent' },
+      { type: 'human', content: 'Message 1' },
+      { type: 'human', content: 'Message 2' },
+      { type: 'human', content: 'Message 3' },
+      { type: 'human', content: DEFAULT_SUMMARIZATION_PROMPT },
+    ]);
   });
 
   it('cache-hit path includes prior summary in the instruction message', async () => {
@@ -859,9 +844,15 @@ describe('createSummarizeNode', () => {
     const lastMsg = capturedMessages[capturedMessages.length - 1];
     expect(lastMsg.type).toBe('human');
     expect(lastMsg.content).toContain('Merge the new messages');
-    // Should include the prior summary
+    // The cached prefix already carries the prior checkpoint.
     expect(lastMsg.content).toContain('<previous-summary>');
-    expect(lastMsg.content).toContain('Prior summary content');
+    expect(lastMsg.content).not.toContain('Prior summary content');
+    expect(
+      capturedMessages
+        .slice(0, -1)
+        .map((msg) => msg.content)
+        .join('')
+    ).toContain('Prior summary content');
   });
 });
 
@@ -1099,8 +1090,8 @@ describe('recency window — first-turn protection', () => {
 
     const setSummary = jest.fn();
     const agentContext = createAgentContext({
-      summarizationConfig: {},
-      maxContextTokens: 1_000,
+      summarizationConfig: { retainRecent: { tokens: 160 } },
+      maxContextTokens: 10_000,
       tokenCounter: () => 100,
       setSummary,
     } as never);
@@ -1138,7 +1129,10 @@ describe('recency window — first-turn protection', () => {
       {} as RunnableConfig
     );
 
-    expect(capturedMessages.slice(0, -1)).toEqual(messages.slice(0, 7));
+    expect(capturedMessages[0].getType()).toBe('system');
+    expect(capturedMessages[0].content).toBe('Test agent');
+    expect(capturedMessages.slice(1, -1)).toEqual(messages);
+    expect(capturedMessages.at(-1)?.content).toBe(DEFAULT_SUMMARIZATION_PROMPT);
     expect(setSummary).toHaveBeenCalledWith(
       expect.stringContaining('Checkpoint of the completed work'),
       expect.any(Number),
@@ -1147,7 +1141,7 @@ describe('recency window — first-turn protection', () => {
     expect(result.messages?.slice(1)).toEqual(messages.slice(7));
   });
 
-  it('keeps a single-turn history when summarization degrades to metadata', async () => {
+  it('keeps a single-turn history when the summarizer fails', async () => {
     captureEvents();
     jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
       class {
@@ -1164,8 +1158,8 @@ describe('recency window — first-turn protection', () => {
       } as never
     );
     const agentContext = createAgentContext({
-      summarizationConfig: {},
-      maxContextTokens: 1_000,
+      summarizationConfig: { retainRecent: { tokens: 160 } },
+      maxContextTokens: 10_000,
       tokenCounter: () => 100,
     });
     const summarizeNode = createSummarizeNode({
@@ -1205,7 +1199,7 @@ describe('recency window — first-turn protection', () => {
     expect(result.messages).toBeUndefined();
   });
 
-  it('still summarizes the head when older turns exist beyond the recency window', async () => {
+  it('retains recent turns separately while sending the full window to the summarizer', async () => {
     captureEvents();
 
     let capturedMessages: { type: string; content: unknown }[] = [];
@@ -1255,13 +1249,17 @@ describe('recency window — first-turn protection', () => {
     // Head (turn 1) summarized; tail (turn 2) preserved verbatim.
     expect(setSummary).toHaveBeenCalledWith(
       expect.stringContaining('Summary of older turns'),
-      expect.any(Number)
+      expect.any(Number),
+      { precedesMessages: true }
     );
-    // Captured messages are the head + the appended summarization instruction.
-    // Head has 2 messages (turn 1) + 1 instruction = 3 total.
-    expect(capturedMessages).toHaveLength(3);
-    expect(capturedMessages[0]?.content).toBe('turn 1 query');
-    expect(capturedMessages[1]?.content).toBe('turn 1 reply');
+    expect(capturedMessages).toEqual([
+      { type: 'system', content: 'Test agent' },
+      ...messages.map((message) => ({
+        type: message.getType(),
+        content: message.content,
+      })),
+      { type: 'human', content: DEFAULT_SUMMARIZATION_PROMPT },
+    ]);
 
     // Returned messages: removeAll marker + tail.
     expect(result.messages).toBeDefined();
@@ -1475,26 +1473,18 @@ describe('recency window — first-turn protection', () => {
     });
   });
 
-  it('keeps the masked tail content (does not re-inject restored tool payloads into state)', async () => {
+  it('keeps masked head and tail content in the summarizer input and retained state', async () => {
     captureEvents();
 
-    let summarizerSawRestored = false;
-    const invokeMock = jest.fn().mockImplementation((messages: unknown) => {
-      const arr = messages as Array<{
-        getType: () => string;
-        content: unknown;
-        tool_call_id?: string;
-      }>;
-      // Confirm the summarizer's input for the restored tool result has
-      // the FULL content, not the masked stub.
-      summarizerSawRestored = arr.some(
-        (m) =>
-          m.getType() === 'tool' &&
-          typeof m.content === 'string' &&
-          (m.content as string).includes('FULL_ORIGINAL_OUTPUT')
-      );
-      return Promise.resolve({ content: 'summary' });
-    });
+    let summarizerToolMessages: ToolMessage[] = [];
+    const invokeMock = jest
+      .fn()
+      .mockImplementation((messages: BaseMessage[]) => {
+        summarizerToolMessages = messages.filter(
+          (message): message is ToolMessage => message instanceof ToolMessage
+        );
+        return Promise.resolve({ content: 'summary' });
+      });
     jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
       class {
         constructor() {
@@ -1508,10 +1498,6 @@ describe('recency window — first-turn protection', () => {
       summarizationConfig: { retainRecent: { turns: 1 } },
       setSummary,
     } as never);
-    // Restoration map keyed by message index — applies to head (idx 2)
-    // AND to a tool message inside the retained tail (idx 5).  Only the
-    // head's restoration should leak into the summarizer; the tail must
-    // keep the masked content.
     agentContext.pendingOriginalToolContent = new Map<number, string>([
       [2, 'FULL_ORIGINAL_OUTPUT for head tool result'],
       [5, 'FULL_ORIGINAL_OUTPUT for tail tool result — must NOT survive'],
@@ -1545,10 +1531,10 @@ describe('recency window — first-turn protection', () => {
     const messages = [
       new HumanMessage('turn 1 query'),
       headToolCall,
-      headToolResult, // index 2 — restored for summarizer
+      headToolResult,
       new HumanMessage('turn 2 query'),
       tailToolCall,
-      tailToolResult, // index 5 — must stay masked in returned tail
+      tailToolResult,
     ];
 
     const result = await summarizeNode(
@@ -1562,10 +1548,10 @@ describe('recency window — first-turn protection', () => {
       {} as RunnableConfig
     );
 
-    // Summarizer saw the full restored head tool result.
-    expect(summarizerSawRestored).toBe(true);
-
-    // Returned tail must contain the MASKED tool result, not the restored one.
+    expect(summarizerToolMessages.map((message) => message.content)).toEqual([
+      'masked-head-stub',
+      'masked-tail-stub',
+    ]);
     expect(result.messages).toBeDefined();
     const tailToolMsg = result.messages!.find(
       (m) => m._getType() === 'tool'
@@ -1575,12 +1561,12 @@ describe('recency window — first-turn protection', () => {
     expect(tailToolMsg!.content).not.toContain('FULL_ORIGINAL_OUTPUT');
   });
 
-  it('bounds restored tool originals and preserves ToolMessage metadata', async () => {
+  it('never restores masked tool originals and preserves ToolMessage metadata', async () => {
     captureEvents();
 
-    let restoredToolMessage: ToolMessage | undefined;
+    let summarizerToolMessage: ToolMessage | undefined;
     const invokeMock = jest.fn().mockImplementation((messages: unknown) => {
-      restoredToolMessage = (messages as Array<unknown>).find(
+      summarizerToolMessage = (messages as Array<unknown>).find(
         (message) => message instanceof ToolMessage
       ) as ToolMessage | undefined;
       return Promise.resolve({ content: 'summary' });
@@ -1636,23 +1622,23 @@ describe('recency window — first-turn protection', () => {
       {} as RunnableConfig
     );
 
-    expect(restoredToolMessage).toBeDefined();
-    expect(typeof restoredToolMessage!.content).toBe('string');
-    expect(String(restoredToolMessage!.content).length).toBeLessThanOrEqual(
-      2_400
-    );
-    expect(restoredToolMessage!.content).toContain('[truncated:');
-    expect(restoredToolMessage!.status).toBe('success');
-    expect(restoredToolMessage!.artifact).toBe(artifact);
-    expect(restoredToolMessage!.metadata).toEqual({ traceId: 'trace-1' });
-    expect(restoredToolMessage!.additional_kwargs).toEqual({ retained: true });
-    expect(restoredToolMessage!.response_metadata).toEqual({
+    expect(summarizerToolMessage).toBeDefined();
+    expect(typeof summarizerToolMessage!.content).toBe('string');
+    expect(summarizerToolMessage!.content).toBe('masked-stub');
+    expect(agentContext.pendingOriginalToolContent).toBeUndefined();
+    expect(summarizerToolMessage!.status).toBe('success');
+    expect(summarizerToolMessage!.artifact).toBe(artifact);
+    expect(summarizerToolMessage!.metadata).toEqual({ traceId: 'trace-1' });
+    expect(summarizerToolMessage!.additional_kwargs).toEqual({
+      retained: true,
+    });
+    expect(summarizerToolMessage!.response_metadata).toEqual({
       requestId: 'request-1',
     });
     expect(originalToolMessage.content).toBe('masked-stub');
   });
 
-  it('preserves tail-relevant pendingOriginalToolContent entries (reindexed) for future summaries', async () => {
+  it('clears all pending tool originals after successfully retaining the masked tail', async () => {
     captureEvents();
 
     jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
@@ -1668,13 +1654,10 @@ describe('recency window — first-turn protection', () => {
       summarizationConfig: { retainRecent: { turns: 1 } },
       setSummary,
     } as never);
-    // Original-content map covers BOTH a head index (1) and tail indices
-    // (3, 5).  Only the tail entries should survive, reindexed to the
-    // post-removeAll state where tail messages start at 0.
     agentContext.pendingOriginalToolContent = new Map<number, string>([
-      [1, 'fullHead'], // belongs to summarized head — should be dropped
-      [3, 'fullTailA'], // tail position 3 → reindexed to 0
-      [5, 'fullTailB'], // tail position 5 → reindexed to 2
+      [1, 'fullHead'],
+      [3, 'fullTailA'],
+      [5, 'fullTailB'],
     ]);
 
     const graph = mockGraph();
@@ -1703,7 +1686,7 @@ describe('recency window — first-turn protection', () => {
       }),
     ];
 
-    await summarizeNode(
+    const result = await summarizeNode(
       {
         messages,
         summarizationRequest: {
@@ -1714,16 +1697,12 @@ describe('recency window — first-turn protection', () => {
       {} as RunnableConfig
     );
 
-    // Summarize fired (we used a real summary text), so head index 1
-    // is gone.  Tail entries should remain, reindexed by subtracting
-    // tailStartIndex (=2): 3→1, 5→3.
-    const carryOver = agentContext.pendingOriginalToolContent;
-    expect(carryOver).toBeDefined();
-    expect(carryOver!.size).toBe(2);
-    expect(carryOver!.get(1)).toBe('fullTailA');
-    expect(carryOver!.get(3)).toBe('fullTailB');
-    expect(carryOver!.has(0)).toBe(false);
-    expect(carryOver!.has(5)).toBe(false);
+    expect(setSummary).toHaveBeenCalledWith('summary', expect.any(Number), {
+      precedesMessages: true,
+    });
+    expect(agentContext.pendingOriginalToolContent).toBeUndefined();
+    expect(result.messages?.[0].getType()).toBe('remove');
+    expect(result.messages?.slice(1)).toEqual(messages.slice(2));
   });
 
   it('aligns the dedupe baseline with the surviving tail length after compaction', async () => {
@@ -1861,7 +1840,11 @@ describe('recency window — first-turn protection', () => {
       {} as RunnableConfig
     );
 
-    expect(setSummary).toHaveBeenCalled();
+    expect(setSummary).toHaveBeenCalledTimes(1);
+    expect(setSummary).toHaveBeenCalledWith(
+      'Legacy summary',
+      expect.any(Number)
+    );
     // Legacy: remove-all only, no tail re-injection.
     expect(result.messages).toHaveLength(1);
     expect(result.messages![0]?._getType()).toBe('remove');
@@ -1951,13 +1934,28 @@ describe('createSummarizeNode — overflow recovery', () => {
         }
       } as never
     );
-    const agentContext = createAgentContext();
+    const agentContext = createAgentContext({
+      tokenCounter: (message: BaseMessage) =>
+        Math.ceil(JSON.stringify(message.content).length / 4) + 4,
+      summarizationConfig: { retainRecent: { turns: 0 } },
+    });
     const graph = mockGraph(() => {});
     const node = createSummarizeNode({ agentContext, graph, generateStepId });
 
     await node(
       {
-        messages: [new HumanMessage('Hello'), new HumanMessage('World')],
+        messages: [
+          new HumanMessage('Hello'),
+          new AIMessage({
+            content: '',
+            tool_calls: [{ id: 'compressible', name: 'search', args: {} }],
+          }),
+          new ToolMessage({
+            content: 'x'.repeat(4000),
+            tool_call_id: 'compressible',
+          }),
+          new AIMessage('World'),
+        ],
         summarizationRequest: {
           remainingContextTokens: 0,
           agentId: 'agent_0',
@@ -1976,7 +1974,7 @@ describe('createSummarizeNode — overflow recovery', () => {
    * committing it removes the head and keeps nothing of what it said. That is
    * never an acceptable way to paper over an overflow.
    */
-  it('keeps history when the escalated summarizer falls back to a stub', async () => {
+  it('preserves history when escalated summarization fails', async () => {
     jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
       class {
         constructor() {
@@ -2104,10 +2102,12 @@ describe('createSummarizeNode — empty summarizer output', () => {
       },
       {}
     );
-    expect(invoke).toHaveBeenCalledTimes(1);
+    // The bounded-input recovery retries once before the protected head no longer fits.
+    expect(invoke).toHaveBeenCalledTimes(2);
     expect(result.messages).toBeUndefined();
     expect(agentContext.getSummaryText()).toBe('Existing checkpoint');
     expect(agentContext.summaryVersion).toBe(1);
+    expect(result.summarizationRequest).toBeUndefined();
   });
 
   /** Model whose response carries no text — the shape a reasoning-only
@@ -2167,8 +2167,8 @@ describe('createSummarizeNode — empty summarizer output', () => {
     const completeEvent = events.find(
       (e) => e.event === GraphEvents.ON_SUMMARIZE_COMPLETE
     );
-    expect((completeEvent?.data as t.SummarizeCompleteEvent).error).toBe(
-      'Summarization produced empty output'
+    expect((completeEvent?.data as t.SummarizeCompleteEvent).error).toContain(
+      'conversation history was preserved'
     );
     expect(
       (completeEvent?.data as t.SummarizeCompleteEvent).summary
@@ -2259,8 +2259,8 @@ describe('createSummarizeNode — empty summarizer output', () => {
     expect(agentContext.getSummaryText()).toContain('A real checkpoint');
   });
 
-  it('counts a preserved-history stub failure toward the cap', async () => {
-    captureEvents();
+  it('counts provider failures toward the failure cap without weakening required-head coverage', async () => {
+    const events = captureEvents();
 
     const invoke = jest.fn().mockRejectedValue(new Error('provider down'));
     jest.spyOn(providers, 'getChatModelClass').mockReturnValue(
@@ -2271,9 +2271,10 @@ describe('createSummarizeNode — empty summarizer output', () => {
       } as never
     );
 
-    const agentContext = createAgentContext();
-    /** Escalated overflow recovery: the stub is refused so history survives,
-     *  which means the attempt made no progress either. */
+    const agentContext = createAgentContext({
+      tokenCounter: () => 10,
+      summarizationConfig: { retainRecent: { turns: 0 } },
+    });
     const node = createSummarizeNode({
       agentContext,
       graph: mockGraph() as never,
@@ -2284,22 +2285,30 @@ describe('createSummarizeNode — empty summarizer output', () => {
     for (let attempt = 0; attempt < 5; attempt++) {
       messages.push(new HumanMessage(`question ${attempt}`));
       messages.push(new AIMessage(`answer ${attempt}`));
-      await node(
+      const result = await node(
         {
           messages: [...messages],
           summarizationRequest: {
             remainingContextTokens: 0,
             agentId: 'agent_0',
-            reason: 'overflow',
+            reason: 'trigger',
             allowSummarization: true,
           },
         },
         {} as RunnableConfig
       );
+      expect(result.messages).toBeUndefined();
     }
 
     expect(invoke).toHaveBeenCalledTimes(3);
+    expect(agentContext.summarizationFailures).toBe(3);
+    expect(agentContext.summarizationExhausted).toBe(true);
     expect(agentContext.hasSummary()).toBe(false);
+    expect(
+      events
+        .filter((event) => event.event === GraphEvents.ON_SUMMARIZE_COMPLETE)
+        .map((event) => (event.data as t.SummarizeCompleteEvent).errorCode)
+    ).toEqual(['unknown', 'unknown', 'unknown']);
   });
 });
 

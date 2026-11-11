@@ -737,7 +737,7 @@ function generateSearchScript(
     '// Compile regex (pattern is sanitized client-side)',
     'var regex;',
     'try {',
-    '  regex = new RegExp(pattern, \'i\');',
+    "  regex = new RegExp(pattern, 'i');",
     '} catch (e) {',
     '  regex = new RegExp(pattern.replace(/[.*+?^${}()[\\]\\\\|]/g, "\\\\$&"), "i");',
     '}',
@@ -748,32 +748,32 @@ function generateSearchScript(
     'for (var j = 0; j < tools.length; j++) {',
     '  var tool = tools[j];',
     '  var bestScore = 0;',
-    '  var matchedField = \'\';',
-    '  var snippet = \'\';',
+    "  var matchedField = '';",
+    "  var snippet = '';",
     '',
     '  // Search name (highest priority)',
-    '  if (searchFields.indexOf(\'name\') >= 0 && regex.test(tool.name)) {',
+    "  if (searchFields.indexOf('name') >= 0 && regex.test(tool.name)) {",
     '    bestScore = 0.95;',
-    '    matchedField = \'name\';',
+    "    matchedField = 'name';",
     '    snippet = tool.name;',
     '  }',
     '',
     '  // Search description (medium priority)',
-    '  if (searchFields.indexOf(\'description\') >= 0 && tool.description && regex.test(tool.description)) {',
+    "  if (searchFields.indexOf('description') >= 0 && tool.description && regex.test(tool.description)) {",
     '    if (bestScore === 0) {',
     '      bestScore = 0.75;',
-    '      matchedField = \'description\';',
+    "      matchedField = 'description';",
     '      snippet = tool.description.substring(0, 100);',
     '    }',
     '  }',
     '',
     '  // Search parameter names (lower priority)',
-    '  if (searchFields.indexOf(\'parameters\') >= 0 && tool.parameters && tool.parameters.properties) {',
-    '    var paramNames = Object.keys(tool.parameters.properties).join(\' \');',
+    "  if (searchFields.indexOf('parameters') >= 0 && tool.parameters && tool.parameters.properties) {",
+    "    var paramNames = Object.keys(tool.parameters.properties).join(' ');",
     '    if (regex.test(paramNames)) {',
     '      if (bestScore === 0) {',
     '        bestScore = 0.60;',
-    '        matchedField = \'parameters\';',
+    "        matchedField = 'parameters';",
     '        snippet = paramNames;',
     '      }',
     '    }',
@@ -1164,11 +1164,11 @@ ${mcpNote}${toolsListSection}
       const { resolved: matchedServers, unresolved: unknownServers } =
         hasServerFilter
           ? resolveServerFilters(
-            serverFilters,
-            registeredServers === undefined
-              ? []
-              : Array.from(registeredServers)
-          )
+              serverFilters,
+              registeredServers === undefined
+                ? []
+                : Array.from(registeredServers)
+            )
           : { resolved: [], unresolved: [] };
 
       const activeServers = matchedServers.filter(
@@ -1349,7 +1349,7 @@ ${mcpNote}${toolsListSection}
         };
 
         const proxyAgent = resolveFetchProxyAgent(EXEC_ENDPOINT);
-        if (proxyAgent) {
+        if (proxyAgent !== undefined) {
           fetchOptions.agent = proxyAgent;
         }
 

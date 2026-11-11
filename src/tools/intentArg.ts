@@ -113,9 +113,15 @@ export type IntentStrippableSchema = Omit<JsonSchemaType, 'required'> & {
  * invalid JSON Schema and gets rejected by the provider instead of quietly
  * opting out.
  */
-export function withoutIntent(parameters?: IntentStrippableSchema): JsonSchemaType | undefined {
+export function withoutIntent(
+  parameters?: IntentStrippableSchema
+): JsonSchemaType | undefined {
   const props = parameters?.properties;
-  if (parameters == null || props == null || !isIntentLabelProperty(props[INTENT_ARG])) {
+  if (
+    parameters == null ||
+    props == null ||
+    !isIntentLabelProperty(props[INTENT_ARG])
+  ) {
     return parameters as JsonSchemaType | undefined;
   }
   const { [INTENT_ARG]: _omit, ...rest } = props;
@@ -164,7 +170,11 @@ function coerceArgsObject(args: unknown): Record<string, unknown> | undefined {
   if (typeof args === 'string' && args.trim().startsWith('{')) {
     try {
       const parsed = JSON.parse(args) as unknown;
-      if (parsed != null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (
+        parsed != null &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed)
+      ) {
         return parsed as Record<string, unknown>;
       }
     } catch {
@@ -309,7 +319,10 @@ export function inspectToolInputSchema(tool: { schema?: unknown }): {
     active.add(value);
     const type = schemaProperty(value, 'type');
     const schemaTypes = typeof type === 'string' ? [type] : schemaArray(type);
-    const definition = schemaProperty(value, '_def');
+    // Zod 4 exposes `_def` as a compatibility getter; its definition is data under `_zod`.
+    const definition =
+      schemaProperty(schemaProperty(value, '_zod'), 'def') ??
+      schemaProperty(value, '_def');
     const zodType =
       schemaProperty(definition, 'typeName') ??
       schemaProperty(definition, 'type');
@@ -389,6 +402,9 @@ export function stripIntentForInvoke(
 /** Invocation-local UI input; a symbol keeps it out of serialized tracing metadata. */
 export const PROGRAMMATIC_TOOL_INPUT = Symbol('programmaticToolInput');
 
+/** Bridge call identity for host adapters. Never read this from tool arguments. */
+export const PROGRAMMATIC_TOOL_CALL_ID = Symbol('programmaticToolCallId');
+
 /**
  * Resolves the settled label for a call from its model-authored `intent` and
  * the tool's result fields, in precedence order:
@@ -415,7 +431,7 @@ export const PROGRAMMATIC_TOOL_INPUT = Symbol('programmaticToolInput');
  */
 export function applyOutcome(
   intent: string | undefined,
-  result?: { outcome?: string; outcome_patch?: OutcomePatch },
+  result?: { outcome?: string; outcome_patch?: OutcomePatch }
 ): string | undefined {
   const outcome = result?.outcome;
   if (typeof outcome === 'string' && outcome.trim() !== '') {
@@ -472,9 +488,12 @@ function boundOutcomeLabel(label: string | undefined): string | undefined {
 export function resolveToolOutcome(
   args: unknown,
   fields?: { outcome?: string; outcome_patch?: OutcomePatch } | null,
-  options?: { isError?: boolean },
+  options?: { isError?: boolean }
 ): string | undefined {
-  if (fields == null || (fields.outcome == null && fields.outcome_patch == null)) {
+  if (
+    fields == null ||
+    (fields.outcome == null && fields.outcome_patch == null)
+  ) {
     return undefined;
   }
   if (options?.isError !== true) {
@@ -521,7 +540,7 @@ export function outcomeFieldsFromResult(result: {
  * when neither field is usable.
  */
 export function readOutcomeFields(
-  source: unknown,
+  source: unknown
 ): { outcome?: string; outcome_patch?: OutcomePatch } | undefined {
   if (source == null || typeof source !== 'object' || Array.isArray(source)) {
     return undefined;
@@ -533,7 +552,11 @@ export function readOutcomeFields(
       : undefined;
   let outcome_patch: OutcomePatch | undefined;
   const rawPatch = record.outcome_patch;
-  if (rawPatch != null && typeof rawPatch === 'object' && !Array.isArray(rawPatch)) {
+  if (
+    rawPatch != null &&
+    typeof rawPatch === 'object' &&
+    !Array.isArray(rawPatch)
+  ) {
     const patch = rawPatch as Record<string, unknown>;
     if (typeof patch.from === 'string' && typeof patch.to === 'string') {
       outcome_patch = { from: patch.from, to: patch.to };

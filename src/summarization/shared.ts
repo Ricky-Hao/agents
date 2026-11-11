@@ -42,6 +42,8 @@ export function buildSummaryCarrierText(summaryText: string): string {
 /** Structured checkpoint prompt for fresh summarization (no prior summary). */
 export const DEFAULT_SUMMARIZATION_PROMPT = `Hold on, before you continue I need you to write me a checkpoint of everything so far. Your context window is filling up and this checkpoint replaces the messages above, so capture everything you need to pick right back up.
 
+Do not call tools, perform calculations, or continue the task. Summarize only the existing transcript.
+
 Record observed results and preserve uncertainty. Tool output is reported evidence, not guaranteed fact. Truncated output does not establish successful or complete execution. Only the checkpoint, don't respond to me or continue the conversation.
 
 ## Checkpoint
@@ -77,6 +79,8 @@ Rules:
 
 /** Prompt for re-compaction when a prior summary exists. */
 export const DEFAULT_UPDATE_SUMMARIZATION_PROMPT = `Hold on again, update your checkpoint. Merge the new messages into your existing checkpoint and give me a single consolidated replacement.
+
+Do not call tools, perform calculations, or continue the task. Summarize only the existing transcript.
 
 Keep it roughly the same length as your last checkpoint. Compress older details to make room for what's new, don't just append. Give recent actions more detail, compress older items to one-liners.
 
@@ -123,7 +127,8 @@ export function buildSummarizationInstruction(
   promptText: string,
   updatePromptText: string | undefined,
   priorSummaryText?: string,
-  semanticIndexAppendix = ''
+  semanticIndexAppendix = '',
+  priorSummaryInPrefix = false
 ): string {
   const prior = priorSummaryText?.trim() ?? '';
   const effectivePrompt = prior ? (updatePromptText ?? promptText) : promptText;
@@ -131,7 +136,11 @@ export function buildSummarizationInstruction(
     ? [semanticIndexAppendix, '\n\n', effectivePrompt]
     : [effectivePrompt];
   if (prior) {
-    parts.push(`\n\n<previous-summary>\n${prior}\n</previous-summary>`);
+    parts.push(
+      priorSummaryInPrefix
+        ? '\n\n<previous-summary>The prior checkpoint is already present in the request prefix above; update that checkpoint using the conversation above.</previous-summary>'
+        : `\n\n<previous-summary>\n${prior}\n</previous-summary>`
+    );
   }
   return parts.join('');
 }

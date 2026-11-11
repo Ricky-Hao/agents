@@ -59,8 +59,6 @@ export class AnthropicToolsOutputParser<
           result
         );
       }
-    } else {
-      parsedResult = result;
     }
     if (this.zodSchema === undefined) {
       return parsedResult as T;
@@ -92,12 +90,12 @@ export class AnthropicToolsOutputParser<
       const tool = extractToolCalls(message.content)[0];
       return tool;
     });
-    if (tools[0] === undefined) {
+    const tool = tools.at(0);
+    if (tool === undefined) {
       throw new Error(
         'No parseable tool calls provided to AnthropicToolsOutputParser.'
       );
     }
-    const [tool] = tools;
     const validatedResult = await this._validateResult(tool.args);
     return validatedResult;
   }

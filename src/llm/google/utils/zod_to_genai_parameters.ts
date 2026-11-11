@@ -25,6 +25,7 @@ export function removeAdditionalProperties(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   obj: Record<string, any>
 ): GenerativeAIJsonSchema {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Recursive schema values can be null at runtime.
   if (typeof obj === 'object' && obj !== null) {
     const newObj = { ...obj };
 

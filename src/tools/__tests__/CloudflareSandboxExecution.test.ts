@@ -267,7 +267,7 @@ it('reports the invoked runner name for Cloudflare caller-policy failures', asyn
   await expect(
     programmatic.invoke(
       {
-        code: 'direct_only_tool \'{}\'',
+        code: "direct_only_tool '{}'",
         tool_manifest: ['direct_only_tool'],
       },
       { toolCall }
@@ -1044,6 +1044,45 @@ describe('Cloudflare sandbox execution backend', () => {
 });
 
 describe('Cloudflare bridge runtime', () => {
+  it.each(['utf8', 'base64', 'stream'] as const)(
+    'preserves %s file contents in the HTTP body',
+    async (encoding) => {
+      const bytes = Buffer.from('héllo\0');
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const request = new Request(input, init);
+        expect(request.method).toBe('PUT');
+        expect(request.headers.get('Content-Type')).toBe(
+          'application/octet-stream'
+        );
+        expect(Buffer.from(await request.arrayBuffer())).toEqual(bytes);
+        return Response.json({ ok: true });
+      };
+      const runtime = createCloudflareBridgeRuntime({
+        baseURL: 'https://bridge.example',
+        sandboxId: 'abc',
+        fetch: fetchImpl,
+      });
+      const content =
+        encoding === 'stream'
+          ? new ReadableStream<Uint8Array>({
+              start(controller) {
+                const chunk = new Uint8Array(
+                  new SharedArrayBuffer(bytes.length)
+                );
+                chunk.set(bytes);
+                controller.enqueue(chunk.subarray(0, 2));
+                controller.enqueue(chunk.subarray(2));
+                controller.close();
+              },
+            })
+          : bytes.toString(encoding);
+
+      await expect(
+        runtime.writeFile('hello.txt', content, { encoding })
+      ).resolves.toEqual({ ok: true });
+    }
+  );
+
   it('preserves caller-provided sandbox ids', async () => {
     const urls: string[] = [];
     const fetchImpl: typeof fetch = async (input) => {
@@ -1131,7 +1170,7 @@ describe('Cloudflare bridge runtime', () => {
     });
 
     expect(command).toContain('-prune');
-    expect(command).toContain('\\( -name \'.*\' -prune \\) -o');
+    expect(command).toContain("\\( -name '.*' -prune \\) -o");
   });
 
   it('fails bridge listFiles for non-directory targets', async () => {

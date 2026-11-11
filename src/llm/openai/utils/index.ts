@@ -55,8 +55,8 @@ import {
   projectToolCallInputs,
   serializeToolCallInput,
 } from '@/messages/prune';
-import { toLangChainContent } from '@/messages/langchain';
 import { isAnthropicThinkingContentBlock } from '@/messages/reasoningTypes';
+import { toLangChainContent } from '@/messages/langchain';
 
 export type { OpenAICallOptions, OpenAIChatInput };
 
@@ -132,6 +132,7 @@ function extractGenericMessageCustomRole(message: ChatMessage) {
     message.role !== 'function' &&
     message.role !== 'tool'
   ) {
+    // eslint-disable-next-line no-console -- Preserve diagnostics for custom provider roles.
     console.warn(`Unknown message role: ${message.role}`);
   }
 
@@ -141,23 +142,23 @@ function extractGenericMessageCustomRole(message: ChatMessage) {
 export function messageToOpenAIRole(message: BaseMessage): OpenAIRoleEnum {
   const type = message._getType();
   switch (type) {
-  case 'system':
-    return 'system';
-  case 'ai':
-    return 'assistant';
-  case 'human':
-    return 'user';
-  case 'function':
-    return 'function';
-  case 'tool':
-    return 'tool';
-  case 'generic': {
-    if (!ChatMessage.isInstance(message))
-      throw new Error('Invalid generic chat message');
-    return extractGenericMessageCustomRole(message);
-  }
-  default:
-    throw new Error(`Unknown message type: ${type}`);
+    case 'system':
+      return 'system';
+    case 'ai':
+      return 'assistant';
+    case 'human':
+      return 'user';
+    case 'function':
+      return 'function';
+    case 'tool':
+      return 'tool';
+    case 'generic': {
+      if (!ChatMessage.isInstance(message))
+        throw new Error('Invalid generic chat message');
+      return extractGenericMessageCustomRole(message);
+    }
+    default:
+      throw new Error(`Unknown message type: ${type}`);
   }
 }
 
@@ -174,14 +175,14 @@ const completionsApiContentBlockConverter: StandardContentBlockConverter<{
   },
 
   fromStandardImageBlock(block): ChatCompletionContentPartImage {
+    const detail = block.metadata?.detail;
+    const hasDetail = Boolean(detail);
     if (block.source_type === 'url') {
       return {
         type: 'image_url',
         image_url: {
           url: block.url,
-          ...(block.metadata?.detail
-            ? { detail: block.metadata.detail as 'auto' | 'low' | 'high' }
-            : {}),
+          ...(hasDetail ? { detail: detail as 'auto' | 'low' | 'high' } : {}),
         },
       };
     }
@@ -192,9 +193,7 @@ const completionsApiContentBlockConverter: StandardContentBlockConverter<{
         type: 'image_url',
         image_url: {
           url,
-          ...(block.metadata?.detail
-            ? { detail: block.metadata.detail as 'auto' | 'low' | 'high' }
-            : {}),
+          ...(hasDetail ? { detail: detail as 'auto' | 'low' | 'high' } : {}),
         },
       };
     }
@@ -213,7 +212,7 @@ const completionsApiContentBlockConverter: StandardContentBlockConverter<{
         );
       }
 
-      const rawMimeType = data.mime_type || block.mime_type || '';
+      const rawMimeType = data.mime_type || (block.mime_type ?? '');
       let mimeType: { type: string; subtype: string };
 
       try {
@@ -285,34 +284,28 @@ const completionsApiContentBlockConverter: StandardContentBlockConverter<{
         );
       }
 
+      let filename = block.metadata?.filename;
+      filename ||= block.metadata?.name;
+      const hasFilename = Boolean(filename);
       return {
         type: 'file',
         file: {
           file_data: block.url, // formatted as base64 data URL
-          ...(block.metadata?.filename || block.metadata?.name
-            ? {
-              filename: (block.metadata.filename ||
-                  block.metadata.name) as string,
-            }
-            : {}),
+          ...(hasFilename ? { filename: filename as string } : {}),
         },
       };
     }
 
     if (block.source_type === 'base64') {
+      let filename = block.metadata?.filename;
+      filename ||= block.metadata?.name;
+      filename ||= block.metadata?.title;
+      const hasFilename = Boolean(filename);
       return {
         type: 'file',
         file: {
           file_data: `data:${block.mime_type ?? ''};base64,${block.data}`,
-          ...(block.metadata?.filename ||
-          block.metadata?.name ||
-          block.metadata?.title
-            ? {
-              filename: (block.metadata.filename ||
-                  block.metadata.name ||
-                  block.metadata.title) as string,
-            }
-            : {}),
+          ...(hasFilename ? { filename: filename as string } : {}),
         },
       };
     }
@@ -373,9 +366,9 @@ export function _convertMessagesToOpenAIParams(
       content =
         options?.preserveToolCacheControl === true
           ? getBoundedCacheControlledTextToolContent(
-            message.content,
-            HARD_MAX_TOOL_RESULT_CHARS
-          )
+              message.content,
+              HARD_MAX_TOOL_RESULT_CHARS
+            )
           : undefined;
       content ??= serializeStructuredValueBounded(
         message.content,
@@ -412,11 +405,16 @@ export function _convertMessagesToOpenAIParams(
       completionParam.function_call = message.additional_kwargs.function_call;
       completionParam.content = '';
     }
-    if (isAIMessage(message) && !!message.tool_calls?.length) {
+    if (
+      isAIMessage(message) &&
+      message.tool_calls != null &&
+      message.tool_calls.length > 0
+    ) {
       messageHasToolCalls = true;
       completionParam.tool_calls = message.tool_calls.map(
         convertLangChainToolCallToBoundedOpenAI
       );
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Assigned inside the content-mapping callback.
       completionParam.content = hasReasoningBlock ? content : '';
       if (
         options?.includeReasoningDetails === true &&
@@ -515,7 +513,7 @@ export function _convertMessagesToOpenAIParams(
           }
         }
       }
-      if ((message as ToolMessage).tool_call_id != null) {
+      if ((message as Partial<ToolMessage>).tool_call_id != null) {
         messageIsToolResult = true;
         completionParam.tool_call_id = (message as ToolMessage).tool_call_id;
       }
@@ -537,7 +535,7 @@ export function _convertMessagesToOpenAIParams(
     }
 
     if (
-      message.additional_kwargs.audio &&
+      message.additional_kwargs.audio != null &&
       typeof message.additional_kwargs.audio === 'object' &&
       'id' in message.additional_kwargs.audio
     ) {
@@ -560,25 +558,23 @@ function _convertReasoningSummaryToOpenAIResponsesParams(
   reasoning: ChatOpenAIReasoningSummary
 ): OpenAIClient.Responses.ResponseReasoningItem {
   // combine summary parts that have the the same index and then remove the indexes
-  const summary = (
+  const summary: OpenAIClient.Responses.ResponseReasoningItem.Summary[] = (
     reasoning.summary.length > 1
       ? reasoning.summary.reduce(
-        (acc, curr) => {
-          const last = acc.at(-1);
+          (acc, curr) => {
+            const last = acc.at(-1);
 
-          if (last!.index === curr.index) {
+            if (last!.index === curr.index) {
               last!.text += curr.text;
-          } else {
-            acc.push(curr);
-          }
-          return acc;
-        },
-        [{ ...reasoning.summary[0] }]
-      )
+            } else {
+              acc.push(curr);
+            }
+            return acc;
+          },
+          [{ ...reasoning.summary[0] }]
+        )
       : reasoning.summary
-  ).map((s) =>
-    Object.fromEntries(Object.entries(s).filter(([k]) => k !== 'index'))
-  ) as OpenAIClient.Responses.ResponseReasoningItem.Summary[];
+  ).map(({ index: _index, ...part }) => part);
 
   return {
     ...reasoning,
@@ -630,13 +626,13 @@ export function _convertMessagesToOpenAIResponsesParams(
           const output: OpenAIClient.Responses.ResponseComputerToolCallOutputScreenshot =
             'image_url' in screenshot
               ? {
-                type: 'computer_screenshot',
-                image_url: screenshot.image_url,
-              }
+                  type: 'computer_screenshot',
+                  image_url: screenshot.image_url,
+                }
               : {
-                type: 'computer_screenshot',
-                file_id: screenshot.file_id,
-              };
+                  type: 'computer_screenshot',
+                  file_id: screenshot.file_id,
+                };
           const computerCallOutput: ResponsesInputItem = {
             type: 'computer_call_output',
             output,
@@ -648,13 +644,16 @@ export function _convertMessagesToOpenAIResponsesParams(
         return {
           type: 'function_call_output',
           call_id: toolMessage.tool_call_id,
-          id: toolMessage.id?.startsWith('fc_') ? toolMessage.id : undefined,
+          id:
+            toolMessage.id?.startsWith('fc_') === true
+              ? toolMessage.id
+              : undefined,
           output:
             typeof toolMessage.content !== 'string'
               ? serializeStructuredValueBounded(
-                toolMessage.content,
-                HARD_MAX_TOOL_RESULT_CHARS
-              ).content
+                  toolMessage.content,
+                  HARD_MAX_TOOL_RESULT_CHARS
+                ).content
               : toolMessage.content,
         };
       }
@@ -662,7 +661,7 @@ export function _convertMessagesToOpenAIResponsesParams(
       if (role === 'assistant') {
         // if we have the original response items, just reuse them
         if (
-          !zdrEnabled &&
+          zdrEnabled !== true &&
           responseMetadata.output != null &&
           Array.isArray(responseMetadata.output) &&
           responseMetadata.output.length > 0 &&
@@ -676,7 +675,7 @@ export function _convertMessagesToOpenAIResponsesParams(
         const input: ResponsesInputItem[] = [];
 
         // reasoning items
-        if (additional_kwargs.reasoning && !zdrEnabled) {
+        if (additional_kwargs.reasoning && zdrEnabled !== true) {
           const reasoningItem = _convertReasoningSummaryToOpenAIResponsesParams(
             additional_kwargs.reasoning
           );
@@ -691,7 +690,10 @@ export function _convertMessagesToOpenAIResponsesParams(
               | OpenAIClient.Responses.ResponseOutputText
               | OpenAIClient.Responses.ResponseOutputRefusal
             >;
-        if (additional_kwargs.refusal) {
+        if (
+          additional_kwargs.refusal != null &&
+          additional_kwargs.refusal !== ''
+        ) {
           if (typeof content === 'string') {
             content = [{ type: 'output_text', text: content, annotations: [] }];
           }
@@ -704,35 +706,42 @@ export function _convertMessagesToOpenAIResponsesParams(
         input.push({
           type: 'message',
           role: 'assistant',
-          ...(lcMsg.id && !zdrEnabled && lcMsg.id.startsWith('msg_')
+          ...(lcMsg.id != null &&
+          lcMsg.id !== '' &&
+          zdrEnabled !== true &&
+          lcMsg.id.startsWith('msg_')
             ? { id: lcMsg.id }
             : {}),
           content:
             typeof content === 'string'
               ? content
               : content.flatMap((item) => {
-                if (item.type === 'text') {
-                  const textItem = item as MessageContentComplex & {
+                  if (item.type === 'text') {
+                    const textItem = item as MessageContentComplex & {
                       annotations?: unknown[];
                     };
-                  return {
-                    type: 'output_text',
-                    text: item.text,
-                    annotations: textItem.annotations ?? [],
-                  };
-                }
+                    return {
+                      type: 'output_text',
+                      text: item.text,
+                      annotations: textItem.annotations ?? [],
+                    };
+                  }
 
-                if (item.type === 'output_text' || item.type === 'refusal') {
-                  return item;
-                }
+                  if (item.type === 'output_text' || item.type === 'refusal') {
+                    return item;
+                  }
 
-                return [];
-              }),
+                  return [];
+                }),
         } as ResponsesInputItem);
 
         const functionCallIds = additional_kwargs[_FUNCTION_CALL_IDS_MAP_KEY];
 
-        if (isAIMessage(lcMsg) && !!lcMsg.tool_calls?.length) {
+        if (
+          isAIMessage(lcMsg) &&
+          lcMsg.tool_calls != null &&
+          lcMsg.tool_calls.length > 0
+        ) {
           input.push(
             ...lcMsg.tool_calls.map(
               (toolCall): ResponsesInputItem => ({
@@ -743,7 +752,9 @@ export function _convertMessagesToOpenAIResponsesParams(
                   MAX_PROVIDER_TOOL_CALL_INPUT_CHARS
                 ),
                 call_id: toolCall.id!,
-                ...(zdrEnabled ? { id: functionCallIds?.[toolCall.id!] } : {}),
+                ...(zdrEnabled === true
+                  ? { id: functionCallIds?.[toolCall.id!] }
+                  : {}),
               })
             )
           );
@@ -755,7 +766,9 @@ export function _convertMessagesToOpenAIResponsesParams(
                 name: toolCall.function.name,
                 call_id: toolCall.id,
                 arguments: toolCall.function.arguments,
-                ...(zdrEnabled ? { id: functionCallIds?.[toolCall.id] } : {}),
+                ...(zdrEnabled === true
+                  ? { id: functionCallIds?.[toolCall.id] }
+                  : {}),
               })
             )
           );
@@ -788,7 +801,7 @@ export function _convertMessagesToOpenAIResponsesParams(
         return input;
       }
 
-      if (role === 'user' || role === 'system' || role === 'developer') {
+      if (['user', 'system', 'developer'].includes(role)) {
         if (typeof lcMsg.content === 'string') {
           return { type: 'message', role, content: lcMsg.content };
         }
@@ -855,6 +868,7 @@ export function _convertMessagesToOpenAIResponsesParams(
         return messages;
       }
 
+      // eslint-disable-next-line no-console -- Preserve diagnostics for unsupported provider roles.
       console.warn(
         `Unsupported role found when converting to OpenAI Responses API: ${role}`
       );
@@ -921,7 +935,7 @@ function _convertOpenAIResponsesMessageToBaseMessage(
             };
           }
 
-          if (part.type === 'refusal') {
+          if ('refusal' in part) {
             additional_kwargs.refusal = part.refusal;
             return [];
           }
@@ -951,7 +965,7 @@ function _convertOpenAIResponsesMessageToBaseMessage(
       }
 
       additional_kwargs[_FUNCTION_CALL_IDS_MAP_KEY] ??= {};
-      if (item.id) {
+      if (item.id != null && item.id !== '') {
         additional_kwargs[_FUNCTION_CALL_IDS_MAP_KEY][item.call_id] = item.id;
       }
     } else if (item.type === 'reasoning') {
@@ -1092,13 +1106,13 @@ export function _convertOpenAIResponsesDeltaToBaseMessageChunk(
     'item' in chunk &&
     chunk.item.type === 'reasoning'
   ) {
-    const summary: ChatOpenAIReasoningSummary['summary'] | undefined = chunk
-      .item.summary
-      ? chunk.item.summary.map((s, index) => ({
-        ...s,
-        index,
-      }))
-      : undefined;
+    const summary: ChatOpenAIReasoningSummary['summary'] | undefined =
+      Array.isArray(chunk.item.summary)
+        ? chunk.item.summary.map((s, index) => ({
+            ...s,
+            index,
+          }))
+        : undefined;
 
     additional_kwargs.reasoning = {
       // We only capture ID in the first chunk or else the concatenated result of all chunks will

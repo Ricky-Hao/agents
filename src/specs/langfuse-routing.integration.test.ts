@@ -517,6 +517,8 @@ async function runTenantSummarizationFlow(tenantId: string): Promise<void> {
           maxContextTokens: 340,
           summarizationEnabled: true,
           summarizationConfig: {
+            prompt: 'Write a checkpoint.',
+            maxSummaryTokens: 32,
             retainRecent: { turns: 0 },
           },
         },
@@ -1210,11 +1212,11 @@ describe('Langfuse per-run routing integration', () => {
         async (input): Promise<StopHookOutput> =>
           input.continuationCount === 0
             ? {
-              decision: 'block',
-              injectedMessages: [
-                { role: 'user', content: 'late steer', source: 'steer' },
-              ],
-            }
+                decision: 'block',
+                injectedMessages: [
+                  { role: 'user', content: 'late steer', source: 'steer' },
+                ],
+              }
             : { decision: 'continue' },
       ],
     });
