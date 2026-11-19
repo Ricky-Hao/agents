@@ -102,6 +102,8 @@ export type SummarizationConfig = {
   contextBudgetMode?: ContextBudgetMode;
   /** Fraction of the token budget reserved as headroom (0–1). Defaults to 0.05. */
   reserveRatio?: number;
+  /** Stream summary text as it arrives. Enable only when the consumer handles delta `reset`. */
+  streamDeltas?: boolean;
   /**
    * Recent-message preservation policy.  When unset, defaults to
    * `{ turns: 2 }` so the last two user-led turns are kept verbatim
@@ -164,6 +166,14 @@ export interface SummarizeStartEvent {
 
 export interface SummarizeDeltaEvent {
   id: string;
+  /**
+   * Discard what this step has streamed so far, then apply `delta`. Deltas go
+   * out while the provider is still responding, so an attempt that is then
+   * abandoned (a retry, a smaller window, a fallback provider, a response with
+   * no summary in it) has already published text. The first delta of the next
+   * attempt carries this, or a delta with no content when no attempt follows.
+   */
+  reset?: boolean;
   delta: {
     summary: SummaryContentBlock;
   };

@@ -177,6 +177,12 @@ function hasToolOutputReference(value: unknown): boolean {
   return false;
 }
 
+function hasAnthropicServerToolId(toolCall: ToolCall): boolean {
+  return (
+    toolCall.id?.startsWith(Constants.ANTHROPIC_SERVER_TOOL_PREFIX) ?? false
+  );
+}
+
 function isEagerExecutionExcludedTool(
   name: string,
   graph: StandardGraph,
@@ -729,9 +735,12 @@ function createEagerToolExecutionPlan(args: {
   // Drop host-excluded tools only AFTER the batch-level guards above have run
   // against the full batch, so excluding a call never hides a sibling direct
   // tool from `hasDirectToolCallInBatch`. Excluded calls fall through to normal
-  // ToolNode execution; siblings may still eager-execute.
+  // ToolNode execution; siblings may still eager-execute. Provider-executed
+  // server tool calls (`srvtoolu_`, e.g. Anthropic web_search) already ran on
+  // the provider side, so they are never dispatched to the host.
   const candidateToolCalls = unstartedToolCalls.filter(
     (toolCall) =>
+      !hasAnthropicServerToolId(toolCall) &&
       !isEagerExecutionExcludedTool(toolCall.name, graph, agentContext)
   );
   if (candidateToolCalls.length === 0) {
@@ -2701,6 +2710,9 @@ export function createContentAggregator(): t.ContentAggregatorResult {
       if (!runStep) {
         console.warn('No run step found for summarize delta event');
         return;
+      }
+      if (deltaData.reset === true) {
+        contentParts[runStep.index] = { type: ContentTypes.SUMMARY };
       }
       updateContent(runStep.index, deltaData.delta.summary);
       return;

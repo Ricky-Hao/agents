@@ -100,7 +100,9 @@ If all providers fail, existing summary state, version, and history remain intac
 
 `on_summarize_delta` 的 `summary.content` 始终是内容块数组。字符串转成 text 块，合法内容块保持原顺序。结构化 reasoning 只提取 `summary` 中的文本，不输出对象或其他元数据。空 reasoning 不发送空 delta，也不能遮蔽同一 chunk 或后续 chunk 的正文。
 
-流中的 reasoning 只用于临时显示。完成事件用最终摘要替换临时内容；保存的摘要只取正文。只有 reasoning、空输出或失败的尝试不能推进摘要边界。
+SDK 默认在摘要尝试成功后发送暂存的增量。增量中的 reasoning 只用于临时显示。完成事件用最终摘要替换临时内容，保存的摘要只取正文。只有 reasoning、空输出或失败的尝试不能推进摘要边界。
+
+消费方支持 `SummarizeDeltaEvent.reset` 时，可以设置 `summarizationConfig.streamDeltas: true` 以接收实时正文。收到 `reset` 后，用本次增量的内容替换步骤的临时内容。空数组会清除临时内容。
 
 ### Summarization Prompt
 
