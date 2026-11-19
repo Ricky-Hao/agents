@@ -88,6 +88,17 @@ describe('buildBashExecutionToolDescription', () => {
     expect(BashToolOutputReferencesGuide).toMatch(/<< 'EOF'/);
   });
 
+  it('describes rejection of unknown keys and the literal escape', () => {
+    expect(BashToolOutputReferencesGuide).toContain(
+      'rejected before anything runs'
+    );
+    expect(BashToolOutputReferencesGuide).toContain('`\\{{tool0turn0}}`');
+    expect(BashToolOutputReferencesGuide).not.toContain('left in place');
+    expect(BashToolOutputReferencesGuide).toContain(
+      '`C:\\out\\\\{{tool0turn0}}`'
+    );
+  });
+
   it('separates base and guide with a blank line', () => {
     const composed = buildBashExecutionToolDescription({
       enableToolOutputReferences: true,

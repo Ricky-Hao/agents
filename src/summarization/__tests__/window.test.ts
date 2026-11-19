@@ -120,6 +120,32 @@ function history(turns: number): BaseMessage[] {
   return result;
 }
 
+/**
+ * The text the emitted deltas leave in the summary. Deltas go out while a
+ * provider is still responding, so an abandoned attempt has published text; a
+ * delta marked `reset` discards whatever was streamed before it.
+ */
+function streamedSummary(
+  emitted: Array<{ event: string; data: t.StreamEventData }>
+): string {
+  let text = '';
+  for (const { event, data } of emitted) {
+    if (event !== GraphEvents.ON_SUMMARIZE_DELTA) {
+      continue;
+    }
+    const delta = data as t.SummarizeDeltaEvent;
+    if (delta.reset === true) {
+      text = '';
+    }
+    for (const block of delta.delta.summary.content ?? []) {
+      if ('text' in block && typeof block.text === 'string') {
+        text += block.text;
+      }
+    }
+  }
+  return text;
+}
+
 function harness({
   maxContextTokens = 32_000,
   model = new SummaryModel(),
@@ -429,9 +455,11 @@ describe('compaction request windows', () => {
     expect(agentContext.getSummaryText()).toBeUndefined();
   });
 
-  it('discards partial output from an overloaded attempt before retrying', async () => {
+  it('replaces partial output from an overloaded attempt when the retry streams', async () => {
     jest.useFakeTimers();
-    const { node, model, emitted, graph } = harness();
+    const { node, model, emitted, graph } = harness({
+      summarizationConfig: { maxSummaryTokens: 128, streamDeltas: true },
+    });
     model.failure = (_sent, attempt) =>
       attempt === 1
         ? new Error(
@@ -456,8 +484,10 @@ describe('compaction request windows', () => {
     const deltas = emitted.filter(
       (event) => event.event === GraphEvents.ON_SUMMARIZE_DELTA
     );
-    expect(deltas).toHaveLength(2);
-    expect(JSON.stringify(deltas)).not.toContain('FAILED_ONLY');
+    expect(
+      deltas.map(({ data }) => (data as t.SummarizeDeltaEvent).reset === true)
+    ).toEqual([false, true, false]);
+    expect(streamedSummary(emitted)).toBe('CLEAN_SUMMARY');
     expect(graph.dispatchRunStep).toHaveBeenCalledTimes(1);
     const completed = emitted.filter(
       (event) => event.event === GraphEvents.ON_SUMMARIZE_COMPLETE
@@ -731,7 +761,7 @@ describe('compaction request windows', () => {
     expect(agentContext.getSummaryText()).toBe('CLEAN_SUMMARY');
   });
 
-  it('publishes only the successful fallback’s deltas before completion', async () => {
+  it('leaves only the successful fallback’s deltas standing before completion', async () => {
     const primary = new SummaryModel();
     const failed = new SummaryModel();
     const successful = new SummaryModel();
@@ -739,6 +769,7 @@ describe('compaction request windows', () => {
     failed.failure = () => new Error('Fallback failed');
     const { node, emitted } = harness({
       model: primary,
+      summarizationConfig: { maxSummaryTokens: 128, streamDeltas: true },
       clientOptions: {
         fallbacks: [
           { provider: Providers.OPENAI, clientOptions: { model: 'failed' } },
@@ -774,10 +805,10 @@ describe('compaction request windows', () => {
     const deltas = emitted.filter(
       ({ event }) => event === GraphEvents.ON_SUMMARIZE_DELTA
     );
-    expect(deltas).toHaveLength(2);
-    expect(JSON.stringify(deltas)).not.toContain('FAILED_ONLY');
-    expect(deltas.map(({ data }) => data)).toEqual([
+    expect(streamedSummary(emitted)).toBe('CLEAN_SUMMARY');
+    expect(deltas.slice(-2).map(({ data }) => data)).toEqual([
       expect.objectContaining({
+        reset: true,
         delta: {
           summary: expect.objectContaining({
             provider: Providers.ANTHROPIC,
@@ -807,13 +838,14 @@ describe('compaction request windows', () => {
     );
   });
 
-  it('does not flush failed fallback chunks when a later non-streaming fallback succeeds', async () => {
+  it('withdraws failed fallback chunks when a later non-streaming fallback succeeds', async () => {
     const primary = new SummaryModel();
     const failed = new SummaryModel();
     primary.failure = () => new Error('Primary failed');
     failed.failure = () => new Error('Fallback failed');
     const { node, emitted, agentContext } = harness({
       model: primary,
+      summarizationConfig: { maxSummaryTokens: 128, streamDeltas: true },
       clientOptions: {
         fallbacks: [
           { provider: Providers.OPENAI, clientOptions: { model: 'failed' } },
@@ -849,9 +881,21 @@ describe('compaction request windows', () => {
       {}
     );
     expect(agentContext.getSummaryText()).toBe('CLEAN_SUMMARY');
+    expect(streamedSummary(emitted)).toBe('');
     expect(
-      emitted.filter(({ event }) => event === GraphEvents.ON_SUMMARIZE_DELTA)
-    ).toHaveLength(0);
+      emitted
+        .filter(({ event }) => event === GraphEvents.ON_SUMMARIZE_DELTA)
+        .at(-1)?.data
+    ).toMatchObject({ reset: true, delta: { summary: { content: [] } } });
+    expect(
+      emitted.findIndex(
+        ({ event }) => event === GraphEvents.ON_SUMMARIZE_COMPLETE
+      )
+    ).toBeGreaterThan(
+      emitted
+        .map(({ event }) => event)
+        .lastIndexOf(GraphEvents.ON_SUMMARIZE_DELTA)
+    );
     expect(
       JSON.stringify(
         emitted.filter(
@@ -1636,9 +1680,7 @@ describe('compaction request windows', () => {
           event === GraphEvents.ON_SUMMARIZE_COMPLETE
       );
       expect(JSON.stringify(output)).not.toContain('PRIVATE_REASONING_ONLY');
-      expect(
-        output.filter(({ event }) => event === GraphEvents.ON_SUMMARIZE_DELTA)
-      ).toHaveLength(2);
+      expect(streamedSummary(emitted)).toBe('CLEAN_SUMMARY');
       expect(
         output.find(({ event }) => event === GraphEvents.ON_SUMMARIZE_COMPLETE)
           ?.data
@@ -2715,17 +2757,20 @@ describe('compaction request windows', () => {
       expect(agentContext.getSummaryText()).toBeUndefined();
       expect(
         emitted.filter(
-          ({ event }) =>
-            event === GraphEvents.ON_SUMMARIZE_COMPLETE ||
-            event === GraphEvents.ON_SUMMARIZE_DELTA
+          ({ event }) => event === GraphEvents.ON_SUMMARIZE_COMPLETE
         )
       ).toHaveLength(0);
+      expect(streamedSummary(emitted)).toBe('');
     }
   );
 
-  it.each(['failure', 'empty'] as const)(
-    'discards all fallback deltas after %s',
-    async (outcome) => {
+  it.each([
+    { outcome: 'failure', streamDeltas: true },
+    { outcome: 'empty', streamDeltas: true },
+    { outcome: 'failure', streamDeltas: undefined },
+  ])(
+    'clears fallback deltas after $outcome with streamDeltas=$streamDeltas',
+    async ({ outcome, streamDeltas }) => {
       const primary = new SummaryModel();
       const failed = new SummaryModel();
       primary.failure = () => new Error('Primary failed');
@@ -2735,6 +2780,7 @@ describe('compaction request windows', () => {
       jest.spyOn(empty, 'invoke').mockResolvedValue(new AIMessageChunk(''));
       const { node, emitted, agentContext } = harness({
         model: primary,
+        summarizationConfig: { maxSummaryTokens: 128, streamDeltas },
         clientOptions: {
           fallbacks: [
             { provider: Providers.OPENAI, clientOptions: { model: 'failed' } },
@@ -2772,9 +2818,18 @@ describe('compaction request windows', () => {
       expect(result.messages).toBeUndefined();
       expect(JSON.stringify(messages)).toBe(before);
       expect(agentContext.getSummaryText()).toBeUndefined();
-      expect(
-        emitted.filter(({ event }) => event === GraphEvents.ON_SUMMARIZE_DELTA)
-      ).toHaveLength(0);
+      expect(streamedSummary(emitted)).toBe('');
+      const deltas = emitted.filter(
+        ({ event }) => event === GraphEvents.ON_SUMMARIZE_DELTA
+      );
+      if (streamDeltas === true) {
+        expect(deltas.at(-1)?.data).toMatchObject({
+          reset: true,
+          delta: { summary: { content: [] } },
+        });
+      } else {
+        expect(deltas).toHaveLength(0);
+      }
       expect(
         JSON.stringify(
           emitted.filter(
@@ -2826,8 +2881,59 @@ describe('compaction request windows', () => {
       errorCode: 'provider_overloaded',
     });
     expect(JSON.stringify(completed)).not.toContain('private-provider-detail');
+    expect(streamedSummary(emitted)).toBe('');
     expect(
-      emitted.filter((event) => event.event === GraphEvents.ON_SUMMARIZE_DELTA)
-    ).toHaveLength(0);
+      emitted.findIndex(
+        ({ event }) => event === GraphEvents.ON_SUMMARIZE_COMPLETE
+      )
+    ).toBeGreaterThan(
+      emitted
+        .map(({ event }) => event)
+        .lastIndexOf(GraphEvents.ON_SUMMARIZE_DELTA)
+    );
+  });
+
+  it.each([
+    { streamDeltas: true, seen: [0, 1] },
+    { streamDeltas: undefined, seen: [0, 0] },
+  ])('delivers summary deltas with streamDeltas=$streamDeltas', async ({ streamDeltas, seen }) => {
+    const model = new SummaryModel();
+    const { node, emitted } = harness({
+      model,
+      summarizationConfig: { maxSummaryTokens: 128, streamDeltas },
+    });
+    const seenAtChunk: number[] = [];
+    const stream = model._streamResponseChunks.bind(model);
+    jest
+      .spyOn(model, '_streamResponseChunks')
+      .mockImplementation(async function* (messages) {
+        for await (const chunk of stream(messages)) {
+          seenAtChunk.push(
+            emitted.filter(
+              ({ event }) => event === GraphEvents.ON_SUMMARIZE_DELTA
+            ).length
+          );
+          yield chunk;
+        }
+      });
+    const messages = history(6);
+    await node(
+      {
+        messages,
+        summarizationRequest: {
+          agentId: 'agent',
+          remainingContextTokens: 0,
+          windowMessages: messages,
+        },
+      },
+      {}
+    );
+    expect(seenAtChunk).toEqual(seen);
+    expect(streamedSummary(emitted)).toBe('CLEAN_SUMMARY');
+    expect(
+      emitted
+        .filter(({ event }) => event === GraphEvents.ON_SUMMARIZE_DELTA)
+        .some(({ data }) => (data as t.SummarizeDeltaEvent).reset === true)
+    ).toBe(false);
   });
 });

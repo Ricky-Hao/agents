@@ -3,15 +3,15 @@ import { createHash } from 'crypto';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import {
-  convertToOpenAITool,
-  isLangChainTool,
-} from '@langchain/core/utils/function_calling';
-import {
   AIMessage,
   BaseMessage,
   HumanMessage,
   ToolMessage,
 } from '@langchain/core/messages';
+import {
+  convertToOpenAITool,
+  isLangChainTool,
+} from '@langchain/core/utils/function_calling';
 import {
   Command,
   END,
@@ -53,6 +53,7 @@ import type {
   RunStepClosedEvent,
   RunStepStatus,
   StandardGraphInput,
+  ExecutableSubagentConfig,
   ExecutableSubagentConfigEntry,
   ResolvedSubagentConfig,
   ResolvedSubagentConfigEntry,
@@ -65,6 +66,7 @@ import type {
   SubagentTaskRuntime,
   SubagentResolveConfigurable,
   SubagentHostArgs,
+  SubagentAgentInputsResolver,
   SubagentResolveRequestContext,
   SubagentResolveUserContext,
   StepCompleted,
@@ -1697,11 +1699,14 @@ export class SubagentExecutor {
       hostArgs?: SubagentHostArgs;
     }
   ): Promise<ResolvedSubagentConfigEntry> {
-    if (isGraphSubagentConfig(config) || config.agentInputs != null) {
-      return Promise.resolve(config as ResolvedSubagentConfigEntry);
+    if (isGraphSubagentConfig(config)) {
+      return Promise.resolve(config);
     }
-    const resolver = config.resolveAgentInputs;
-    const configId = config.configId;
+    const lazy = getExecutionResolver(config, context.hostArgs);
+    if (lazy == null) {
+      return Promise.resolve(config as ResolvedSubagentConfig);
+    }
+    const { resolver, configId } = lazy;
     return execution.resolveConfig(
       (): Promise<ResolvedSubagentConfig> =>
         resolveAgentInputsWithSignal(
@@ -4894,6 +4899,29 @@ function truncateErrorMessage(error: unknown): string {
     return message;
   }
   return `${message.slice(0, ERROR_MESSAGE_MAX_CHARS)}...`;
+}
+
+/**
+ * The resolver one call runs through: always a lazy config's, and a `self`
+ * config's only when the call passed host arguments. Every other call keeps
+ * the config's eager or self inputs.
+ */
+function getExecutionResolver(
+  config: ExecutableSubagentConfig,
+  hostArgs: SubagentHostArgs | undefined
+): { resolver: SubagentAgentInputsResolver; configId: string } | undefined {
+  if (config.agentInputs == null) {
+    return { resolver: config.resolveAgentInputs, configId: config.configId };
+  }
+  if (
+    config.self !== true ||
+    hostArgs == null ||
+    config.resolveAgentInputs == null ||
+    config.configId == null
+  ) {
+    return undefined;
+  }
+  return { resolver: config.resolveAgentInputs, configId: config.configId };
 }
 
 function resolveAgentInputsWithSignal(
