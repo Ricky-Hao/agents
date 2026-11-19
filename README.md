@@ -1,222 +1,30 @@
-# @librechat/agents
+# Ricky-Hao/agents SDK 补丁
 
-TypeScript utilities for building LibreChat agent workflows. The package provides graph orchestration, streaming event handling, tool execution, provider adapters, and message formatting for single-agent and multi-agent runs.
+本分支维护 `@librechat/agents` 的有序补丁。`manifest.json` 固定上游完整 SHA，并记录各组依赖和定向检查。维护分支用于审阅补丁，`release/v<version>` 用于保存生成的 SDK 源码。
 
-## Features
+当前基线是 LibreChat-AI/agents `v4.2.11`（`690865f925800990bc8941e15fe93741b3cbd626`）。完整重放得到原 fork `4.2.11-ricky.1` 的 Git tree `996688a08ea9bca1030271f79e23a14df8ad537d`。[来源与分组](docs/sources.md)
 
-- LangGraph-based single-agent and multi-agent workflows
-- Streaming content aggregation and run-step event handlers
-- Tool calling, tool search, subagent handoffs, and programmatic tool execution
-- Provider adapters for Anthropic, Bedrock, Vertex AI, OpenAI-compatible providers, Google, Mistral, DeepSeek, and xAI
-- Message formatting, context pruning, summarization, and cache-control helpers
-- [Host provider-text protection](docs/host-provider-text.md), with scoped admission, inspection deadlines, and retained-work accounting
+在维护 checkout 根目录运行。重放需要 Git 和 Python 3.9+。SDK 验证和打包使用目标 `package.json` 要求的 Node 与 npm，当前需要 Node 24+。
 
-## Installation
-
-```bash
-npm install @librechat/agents
+```sh
+base=$(python3 -c 'import json; print(json.load(open("manifest.json"))["upstream"]["commit"])')
+sdk=../agents-sdk-replay
+git -c submodule.recurse=false worktree add --detach "$sdk" "$base"
+python3 tools/patchset.py list
+python3 tools/patchset.py check --target "$sdk"
+python3 tools/patchset.py apply --target "$sdk"
+git -C "$sdk" write-tree
+npm --prefix "$sdk" ci --ignore-scripts --no-audit --no-fund
+python3 tools/patchset.py test --target "$sdk"
 ```
 
-## Basic Usage
+`check` 在临时 Git 索引中重放。`apply` 成功后在 SDK checkout 暂存整套差异。两者都从干净的固定基线开始。用 `--only summary-stream` 可验证一个组及其依赖，用 `test --plan` 可查看命令。
 
-```typescript
-import { HumanMessage } from '@langchain/core/messages';
-import { Providers, Run } from '@librechat/agents';
+每次发版在已提交的维护 checkout 中，用完整版本创建新分支。`origin` 指向 Ricky-Hao/agents，输出目录须是新路径。
 
-const run = await Run.create({
-  runId: crypto.randomUUID(),
-  graphConfig: {
-    type: 'standard',
-    instructions: 'You are a helpful assistant.',
-    llmConfig: {
-      provider: Providers.OPENAI,
-      model: 'gpt-4o-mini',
-      apiKey: process.env.OPENAI_API_KEY,
-    },
-  },
-  returnContent: true,
-});
-
-const content = await run.processStream(
-  { messages: [new HumanMessage('Hello')] },
-  {
-    runId: crypto.randomUUID(),
-    streamMode: 'values',
-    version: 'v2',
-  }
-);
+```sh
+python3 tools/release.py --patch-ref HEAD --version 4.2.11-ricky.1 \
+  --output ../agents-release-4.2.11-ricky.1
 ```
 
-## Runtime Provider Registration
-
-Hosts can register a compatible LangChain chat model before creating a run,
-without adding the provider to this package. The provider registration carries
-the model constructor plus the shared message and streaming behavior the model
-needs.
-
-```typescript
-import { registerProvider } from '@librechat/agents/provider-registration';
-import type { LLMConfig } from '@librechat/agents';
-
-interface AcmeOptions {
-  apiKey: string;
-  model: string;
-}
-
-declare module '@librechat/agents/provider-registration' {
-  interface CustomProviderOptionsMap {
-    acme: AcmeOptions;
-  }
-}
-
-const unregister = registerProvider({
-  provider: 'acme',
-  model: AcmeChatModel,
-  family: 'openai',
-});
-
-const llmConfig: LLMConfig = {
-  provider: 'acme',
-  apiKey: process.env.ACME_API_KEY!,
-  model: 'acme-chat',
-};
-```
-
-Register once per process before the provider is used. Duplicate names are
-rejected, and `unregister()` removes only that registration. Set
-`manualToolStream` or `strictAlternation` only when the provider contract needs
-those behaviors. Declaration-merged required options are enforced for direct
-model initialization, graph agents, primary graph configs, and fallbacks.
-
-## Programmatic Sessions
-
-For scripts, CI, and programmatic integrations, use the session facade. It
-keeps a JSONL session tree by default, so runs can be resumed, cloned, forked,
-branched in place, compacted, and inspected later.
-
-```typescript
-import { Providers, createAgentSession } from '@librechat/agents';
-
-const session = await createAgentSession({
-  checkpointing: true,
-  graphConfig: {
-    type: 'standard',
-    instructions: 'You are a concise coding assistant.',
-    llmConfig: {
-      provider: Providers.OPENAI,
-      model: 'gpt-4o-mini',
-      apiKey: process.env.OPENAI_API_KEY,
-    },
-  },
-});
-
-const result = await session.run('Summarize this repository.');
-console.log(result.text);
-console.log(session.sessionPath); // durable .jsonl session file
-```
-
-When `checkpointing` is enabled, the session injects a shared LangGraph
-checkpointer into `compileOptions`, records checkpoint IDs in JSONL, and uses
-checkpoint state for later turns on the same `thread_id`. When HITL is enabled
-(`humanInTheLoop: { enabled: true }`), sessions also get a `MemorySaver` by
-default so `resumeInterrupt()` can reuse the same saver instead of relying on a
-per-run fallback. JSONL still owns portable replay, clone, fork, and audit
-records.
-
-Sessions expose tree operations inspired by Pi-style workflows:
-
-```typescript
-const store = session.getSessionStore();
-const forkPoint = store?.getForkPoints()[0];
-
-if (forkPoint) {
-  const forked = await session.fork(forkPoint.id, { position: 'before' });
-  await forked.run('Try a different approach from here.');
-}
-
-const cloned = await session.clone();
-await cloned.compact({ instructions: 'Keep only implementation decisions.' });
-```
-
-`session.stream()` projects the SDK's existing graph events, and
-`session.compact()` uses the same summarization node, hooks, and provider
-logic as normal runs. JSONL is the durable journal; the graph remains the
-execution engine.
-
-OpenAI-compatible streaming helpers are available as experimental subpaths:
-
-```typescript
-import { composeEventHandlers } from '@librechat/agents';
-import { createOpenAIHandlers } from '@librechat/agents/openai';
-import { createResponsesEventHandlers } from '@librechat/agents/responses';
-
-const customHandlers = composeEventHandlers(
-  createOpenAIHandlers(openAIConfig),
-  createResponsesEventHandlers(responsesConfig),
-  hostHandlers
-);
-```
-
-### Accepted tool-call projection (opt-in)
-
-`createOpenAIToolCallStream` from `@librechat/agents/openai` formats finalized
-calls accepted by the graph, not provider fragments. Existing handlers are unchanged.
-
-- Register `projection.handlers` in `Run.create({ customHandlers })`.
-- For streaming, share `{ tracker, emit }` with the text/reasoning handlers and
-  `sendOpenAIFinalChunk`. Do not also register legacy raw tool-call handlers.
-  Map-only `{ toolCalls }` supports JSON/custom finalization. Use fresh output state.
-- Call `finish()` only after natural completion: no error, aborted signal,
-  `getInterrupt()` or `getHaltReason()`. Otherwise call `abort()` and discard it.
-  A resolved `processStream()` alone does not mean success.
-- Calls execute in the graph by default. To hand a complete call to the OpenAI
-  client instead, set `clientDelegatedToolNames: ['my_tool']` in `Run.create`
-  for a single-agent run and register its model-facing schema. The graph ends
-  without executing that call. Batches mixing delegated and graph/provider
-  tools fail closed; make separate model turns. ToolNode claims remain an
-  additional guard, never proof that an unclaimed call belongs to the client.
-- `emit` is synchronous. Failed/partial writes cannot be retried; the host owns
-  HTTP backpressure. This helper does not provide durable resume or undo tool effects.
-
-Projected arguments must be JSON data: primitives, plain objects and dense arrays.
-Getters, custom objects, cycles and nesting beyond 64 levels are rejected before projection.
-Observers receive isolated snapshots; provider IDs are reserved before synthetic IDs.
-Accepted-event snapshots cap each response at **1,024 calls / 4 MiB**. Projection
-uses those defaults for pending calls (`maxToolCalls` / `maxBufferedBytes`). These
-formatting limits do not apply to ordinary runs without accepted-event handlers;
-descriptor safety checks still apply before stream accounting and dispatch.
-These are output limits, not bounds on provider memory or tool execution.
-
-See [the design decision](docs/adr/0010-project-accepted-model-results.md).
-
-## Local coding tools
-
-`toolExecution.local.codingToolNames` optionally selects the auto-bound local
-coding tools. Omit it to keep the full existing suite. This selection does not
-grant filesystem or command permissions.
-
-`toolExecution.local.toolResultMaxChars` optionally limits retained text from
-`read_file`, `grep_search`, and `bash_tool`. Unset keeps the existing limits.
-Read results include a continuation offset, search results count omitted lines,
-and shell results retain exit status. Truncation markers and diagnostic labels
-remain visible, including skipped-file notices whose paths are truncated.
-
-## Development
-
-```bash
-npm ci
-npm run build
-npm test
-npx tsc --noEmit
-npx eslint src/
-```
-
-## Documentation
-
-- [Multi-agent patterns](./docs/multi-agent-patterns.md)
-- [Summarization behavior](./docs/summarization-behavior.md)
-- [Fork consumer migration](./docs/sdk-consumer-migration.md)
-
-## License
-
-MIT
+命令保留完整重放提交，在发版分支的 tip 移除 GitHub Actions workflows，并构建和验证 SDK tarball。保留输出目录中的 tarball、源码 diff 和 `release.json`。版本更新、冲突处理、替代、淘汰及 LibreChat 接入见[维护手册](docs/maintenance.md)。

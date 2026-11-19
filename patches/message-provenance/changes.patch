@@ -1,0 +1,1293 @@
+diff --git a/src/llm/anthropic/index.ts b/src/llm/anthropic/index.ts
+index b3ec0bca1512b230c233d424ea279ff5090d94c6..99a5bf803c0d6f52d8cdb13af629d931a449479a 100644
+--- a/src/llm/anthropic/index.ts
++++ b/src/llm/anthropic/index.ts
+@@ -701,7 +701,7 @@ export class CustomAnthropic extends ChatAnthropicMessages {
+ 
+     const source = (async function* (): AsyncGenerator<
+       SmoothItem<AnthropicEmittedChunk>
+-      > {
++    > {
+       for await (const data of stream) {
+         const result = _makeMessageChunkFromAnthropicEvent(
+           data as Anthropic.Beta.Messages.BetaRawMessageStreamEvent,
+@@ -765,8 +765,8 @@ export class CustomAnthropic extends ChatAnthropicMessages {
+             const chunkForPiece =
+               !piece.isFirst && cloned.usage_metadata != null
+                 ? new AIMessageChunk(
+-                  Object.assign({}, cloned, { usage_metadata: undefined })
+-                )
++                    Object.assign({}, cloned, { usage_metadata: undefined })
++                  )
+                 : cloned;
+             return toEmittedChunk(piece.text, chunkForPiece);
+           },
+diff --git a/src/llm/anthropic/utils/message_inputs.ts b/src/llm/anthropic/utils/message_inputs.ts
+index 349c21d0e3bf41aef7e7abce0d423a1bf2bca920..c340700e9ed8caa3c2b4489d17ff31eeec37506e 100644
+--- a/src/llm/anthropic/utils/message_inputs.ts
++++ b/src/llm/anthropic/utils/message_inputs.ts
+@@ -151,6 +151,10 @@ export function normalizeAnthropicToolCallId(
+   return `${sanitized.slice(0, prefixMaxLength)}_${hash}`;
+ }
+ 
++function isContentObject(block: unknown): block is object {
++  return typeof block === 'object' && block !== null && !isProxy(block);
++}
++
+ /**
+  * Lift any `cache_control` off the inner blocks of a tool result onto the
+  * `tool_result` block itself. Anthropic documents the top-level
+@@ -168,7 +172,7 @@ function hoistToolResultCacheControl(
+   }
+   let cacheControl: unknown;
+   const stripped = content.map((block) => {
+-    if (typeof block !== 'object' || block == null || isProxy(block)) {
++    if (!isContentObject(block)) {
+       return block;
+     }
+     try {
+@@ -211,7 +215,7 @@ function unwrapToolMessageResultContent(content: ToolMessage['content']): {
+   }
+ 
+   const block = content[0];
+-  if (typeof block !== 'object' || block == null || isProxy(block)) {
++  if (!isContentObject(block)) {
+     return { content, cacheControl: undefined, isError: undefined };
+   }
+ 
+@@ -350,15 +354,15 @@ function _ensureMessageContents(
+           unwrapped.content == null
+             ? undefined
+             : _formatContent(
+-              unwrapped.content === toolMessageContent
+-                ? toolMessage
+-                : cloneToolMessageWithContent(
+-                  toolMessage,
++                unwrapped.content === toolMessageContent
++                  ? toolMessage
++                  : cloneToolMessageWithContent(
++                      toolMessage,
+                       unwrapped.content as Parameters<
+                         typeof cloneToolMessageWithContent
+                       >[1]
+-                )
+-            );
++                    )
++              );
+         // Hoist a tail cache_control off the inner content onto the
+         // tool_result block itself (the documented cacheable position).
+         const { content: hoistedContent, cacheControl: innerCacheControl } =
+@@ -963,8 +967,8 @@ function _formatContent(message: BaseMessage) {
+         ) {
+           const matchingToolCall = isAIMessage(message)
+             ? message.tool_calls?.find(
+-              (toolCall) => toolCall.id === contentPartCopy.id
+-            )
++                (toolCall) => toolCall.id === contentPartCopy.id
++              )
+             : undefined;
+           if (matchingToolCall) {
+             contentPartCopy.input = matchingToolCall.args;
+@@ -1140,11 +1144,11 @@ export function _convertMessagesToAnthropicPayload(
+               clientToolCalls.length > 0
+                 ? clientToolCalls.map(_convertLangChainToolCallToAnthropic)
+                 : [
+-                  {
+-                    type: 'text' as const,
+-                    text: ANTHROPIC_EMPTY_TEXT_PLACEHOLDER,
+-                  },
+-                ],
++                    {
++                      type: 'text' as const,
++                      text: ANTHROPIC_EMPTY_TEXT_PLACEHOLDER,
++                    },
++                  ],
+           };
+         } else {
+           return {
+diff --git a/src/llm/bedrock/utils/message_inputs.ts b/src/llm/bedrock/utils/message_inputs.ts
+index 99659f568f891f2f116b972a45196d0aeb748d03..f6927fe0956f3ba289d135ff72d7f79105d15dd6 100644
+--- a/src/llm/bedrock/utils/message_inputs.ts
++++ b/src/llm/bedrock/utils/message_inputs.ts
+@@ -29,9 +29,9 @@ import type {
+   MessageContentReasoningBlock,
+ } from '../types';
+ import { serializeStructuredValueBounded } from '@/utils/toolContent';
+-import { neutralizeHarmonyRequest } from './harmony';
+ import { isReasoningContentBlock } from '@/messages/reasoningTypes';
+ import { HARD_MAX_TOOL_RESULT_CHARS } from '@/utils/truncation';
++import { neutralizeHarmonyRequest } from './harmony';
+ 
+ /**
+  * Reasoning blocks from other providers, relative to Bedrock. Bedrock's native
+diff --git a/src/llm/openai/utils/index.ts b/src/llm/openai/utils/index.ts
+index b0b1225286e5dbd9e714b6272fb6f28184ddd2b8..9160eb64474417b6cb6fb04add7af528bf638977 100644
+--- a/src/llm/openai/utils/index.ts
++++ b/src/llm/openai/utils/index.ts
+@@ -55,8 +55,8 @@ import {
+   projectToolCallInputs,
+   serializeToolCallInput,
+ } from '@/messages/prune';
+-import { toLangChainContent } from '@/messages/langchain';
+ import { isAnthropicThinkingContentBlock } from '@/messages/reasoningTypes';
++import { toLangChainContent } from '@/messages/langchain';
+ 
+ export type { OpenAICallOptions, OpenAIChatInput };
+ 
+@@ -132,6 +132,7 @@ function extractGenericMessageCustomRole(message: ChatMessage) {
+     message.role !== 'function' &&
+     message.role !== 'tool'
+   ) {
++    // eslint-disable-next-line no-console -- Preserve diagnostics for custom provider roles.
+     console.warn(`Unknown message role: ${message.role}`);
+   }
+ 
+@@ -141,23 +142,23 @@ function extractGenericMessageCustomRole(message: ChatMessage) {
+ export function messageToOpenAIRole(message: BaseMessage): OpenAIRoleEnum {
+   const type = message._getType();
+   switch (type) {
+-  case 'system':
+-    return 'system';
+-  case 'ai':
+-    return 'assistant';
+-  case 'human':
+-    return 'user';
+-  case 'function':
+-    return 'function';
+-  case 'tool':
+-    return 'tool';
+-  case 'generic': {
+-    if (!ChatMessage.isInstance(message))
+-      throw new Error('Invalid generic chat message');
+-    return extractGenericMessageCustomRole(message);
+-  }
+-  default:
+-    throw new Error(`Unknown message type: ${type}`);
++    case 'system':
++      return 'system';
++    case 'ai':
++      return 'assistant';
++    case 'human':
++      return 'user';
++    case 'function':
++      return 'function';
++    case 'tool':
++      return 'tool';
++    case 'generic': {
++      if (!ChatMessage.isInstance(message))
++        throw new Error('Invalid generic chat message');
++      return extractGenericMessageCustomRole(message);
++    }
++    default:
++      throw new Error(`Unknown message type: ${type}`);
+   }
+ }
+ 
+@@ -174,14 +175,14 @@ const completionsApiContentBlockConverter: StandardContentBlockConverter<{
+   },
+ 
+   fromStandardImageBlock(block): ChatCompletionContentPartImage {
++    const detail = block.metadata?.detail;
++    const hasDetail = Boolean(detail);
+     if (block.source_type === 'url') {
+       return {
+         type: 'image_url',
+         image_url: {
+           url: block.url,
+-          ...(block.metadata?.detail
+-            ? { detail: block.metadata.detail as 'auto' | 'low' | 'high' }
+-            : {}),
++          ...(hasDetail ? { detail: detail as 'auto' | 'low' | 'high' } : {}),
+         },
+       };
+     }
+@@ -192,9 +193,7 @@ const completionsApiContentBlockConverter: StandardContentBlockConverter<{
+         type: 'image_url',
+         image_url: {
+           url,
+-          ...(block.metadata?.detail
+-            ? { detail: block.metadata.detail as 'auto' | 'low' | 'high' }
+-            : {}),
++          ...(hasDetail ? { detail: detail as 'auto' | 'low' | 'high' } : {}),
+         },
+       };
+     }
+@@ -213,7 +212,7 @@ const completionsApiContentBlockConverter: StandardContentBlockConverter<{
+         );
+       }
+ 
+-      const rawMimeType = data.mime_type || block.mime_type || '';
++      const rawMimeType = data.mime_type || (block.mime_type ?? '');
+       let mimeType: { type: string; subtype: string };
+ 
+       try {
+@@ -285,34 +284,28 @@ const completionsApiContentBlockConverter: StandardContentBlockConverter<{
+         );
+       }
+ 
++      let filename = block.metadata?.filename;
++      filename ||= block.metadata?.name;
++      const hasFilename = Boolean(filename);
+       return {
+         type: 'file',
+         file: {
+           file_data: block.url, // formatted as base64 data URL
+-          ...(block.metadata?.filename || block.metadata?.name
+-            ? {
+-              filename: (block.metadata.filename ||
+-                  block.metadata.name) as string,
+-            }
+-            : {}),
++          ...(hasFilename ? { filename: filename as string } : {}),
+         },
+       };
+     }
+ 
+     if (block.source_type === 'base64') {
++      let filename = block.metadata?.filename;
++      filename ||= block.metadata?.name;
++      filename ||= block.metadata?.title;
++      const hasFilename = Boolean(filename);
+       return {
+         type: 'file',
+         file: {
+           file_data: `data:${block.mime_type ?? ''};base64,${block.data}`,
+-          ...(block.metadata?.filename ||
+-          block.metadata?.name ||
+-          block.metadata?.title
+-            ? {
+-              filename: (block.metadata.filename ||
+-                  block.metadata.name ||
+-                  block.metadata.title) as string,
+-            }
+-            : {}),
++          ...(hasFilename ? { filename: filename as string } : {}),
+         },
+       };
+     }
+@@ -373,9 +366,9 @@ export function _convertMessagesToOpenAIParams(
+       content =
+         options?.preserveToolCacheControl === true
+           ? getBoundedCacheControlledTextToolContent(
+-            message.content,
+-            HARD_MAX_TOOL_RESULT_CHARS
+-          )
++              message.content,
++              HARD_MAX_TOOL_RESULT_CHARS
++            )
+           : undefined;
+       content ??= serializeStructuredValueBounded(
+         message.content,
+@@ -412,11 +405,16 @@ export function _convertMessagesToOpenAIParams(
+       completionParam.function_call = message.additional_kwargs.function_call;
+       completionParam.content = '';
+     }
+-    if (isAIMessage(message) && !!message.tool_calls?.length) {
++    if (
++      isAIMessage(message) &&
++      message.tool_calls != null &&
++      message.tool_calls.length > 0
++    ) {
+       messageHasToolCalls = true;
+       completionParam.tool_calls = message.tool_calls.map(
+         convertLangChainToolCallToBoundedOpenAI
+       );
++      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Assigned inside the content-mapping callback.
+       completionParam.content = hasReasoningBlock ? content : '';
+       if (
+         options?.includeReasoningDetails === true &&
+@@ -515,7 +513,7 @@ export function _convertMessagesToOpenAIParams(
+           }
+         }
+       }
+-      if ((message as ToolMessage).tool_call_id != null) {
++      if ((message as Partial<ToolMessage>).tool_call_id != null) {
+         messageIsToolResult = true;
+         completionParam.tool_call_id = (message as ToolMessage).tool_call_id;
+       }
+@@ -537,7 +535,7 @@ export function _convertMessagesToOpenAIParams(
+     }
+ 
+     if (
+-      message.additional_kwargs.audio &&
++      message.additional_kwargs.audio != null &&
+       typeof message.additional_kwargs.audio === 'object' &&
+       'id' in message.additional_kwargs.audio
+     ) {
+@@ -563,18 +561,18 @@ function _convertReasoningSummaryToOpenAIResponsesParams(
+   const summary: OpenAIClient.Responses.ResponseReasoningItem.Summary[] = (
+     reasoning.summary.length > 1
+       ? reasoning.summary.reduce(
+-        (acc, curr) => {
+-          const last = acc.at(-1);
++          (acc, curr) => {
++            const last = acc.at(-1);
+ 
+-          if (last!.index === curr.index) {
++            if (last!.index === curr.index) {
+               last!.text += curr.text;
+-          } else {
+-            acc.push(curr);
+-          }
+-          return acc;
+-        },
+-        [{ ...reasoning.summary[0] }]
+-      )
++            } else {
++              acc.push(curr);
++            }
++            return acc;
++          },
++          [{ ...reasoning.summary[0] }]
++        )
+       : reasoning.summary
+   ).map(({ index: _index, ...part }) => part);
+ 
+@@ -628,13 +626,13 @@ export function _convertMessagesToOpenAIResponsesParams(
+           const output: OpenAIClient.Responses.ResponseComputerToolCallOutputScreenshot =
+             'image_url' in screenshot
+               ? {
+-                type: 'computer_screenshot',
+-                image_url: screenshot.image_url,
+-              }
++                  type: 'computer_screenshot',
++                  image_url: screenshot.image_url,
++                }
+               : {
+-                type: 'computer_screenshot',
+-                file_id: screenshot.file_id,
+-              };
++                  type: 'computer_screenshot',
++                  file_id: screenshot.file_id,
++                };
+           const computerCallOutput: ResponsesInputItem = {
+             type: 'computer_call_output',
+             output,
+@@ -646,13 +644,16 @@ export function _convertMessagesToOpenAIResponsesParams(
+         return {
+           type: 'function_call_output',
+           call_id: toolMessage.tool_call_id,
+-          id: toolMessage.id?.startsWith('fc_') ? toolMessage.id : undefined,
++          id:
++            toolMessage.id?.startsWith('fc_') === true
++              ? toolMessage.id
++              : undefined,
+           output:
+             typeof toolMessage.content !== 'string'
+               ? serializeStructuredValueBounded(
+-                toolMessage.content,
+-                HARD_MAX_TOOL_RESULT_CHARS
+-              ).content
++                  toolMessage.content,
++                  HARD_MAX_TOOL_RESULT_CHARS
++                ).content
+               : toolMessage.content,
+         };
+       }
+@@ -660,7 +661,7 @@ export function _convertMessagesToOpenAIResponsesParams(
+       if (role === 'assistant') {
+         // if we have the original response items, just reuse them
+         if (
+-          !zdrEnabled &&
++          zdrEnabled !== true &&
+           responseMetadata.output != null &&
+           Array.isArray(responseMetadata.output) &&
+           responseMetadata.output.length > 0 &&
+@@ -674,7 +675,7 @@ export function _convertMessagesToOpenAIResponsesParams(
+         const input: ResponsesInputItem[] = [];
+ 
+         // reasoning items
+-        if (additional_kwargs.reasoning && !zdrEnabled) {
++        if (additional_kwargs.reasoning && zdrEnabled !== true) {
+           const reasoningItem = _convertReasoningSummaryToOpenAIResponsesParams(
+             additional_kwargs.reasoning
+           );
+@@ -689,7 +690,10 @@ export function _convertMessagesToOpenAIResponsesParams(
+               | OpenAIClient.Responses.ResponseOutputText
+               | OpenAIClient.Responses.ResponseOutputRefusal
+             >;
+-        if (additional_kwargs.refusal) {
++        if (
++          additional_kwargs.refusal != null &&
++          additional_kwargs.refusal !== ''
++        ) {
+           if (typeof content === 'string') {
+             content = [{ type: 'output_text', text: content, annotations: [] }];
+           }
+@@ -702,35 +706,42 @@ export function _convertMessagesToOpenAIResponsesParams(
+         input.push({
+           type: 'message',
+           role: 'assistant',
+-          ...(lcMsg.id && !zdrEnabled && lcMsg.id.startsWith('msg_')
++          ...(lcMsg.id != null &&
++          lcMsg.id !== '' &&
++          zdrEnabled !== true &&
++          lcMsg.id.startsWith('msg_')
+             ? { id: lcMsg.id }
+             : {}),
+           content:
+             typeof content === 'string'
+               ? content
+               : content.flatMap((item) => {
+-                if (item.type === 'text') {
+-                  const textItem = item as MessageContentComplex & {
++                  if (item.type === 'text') {
++                    const textItem = item as MessageContentComplex & {
+                       annotations?: unknown[];
+                     };
+-                  return {
+-                    type: 'output_text',
+-                    text: item.text,
+-                    annotations: textItem.annotations ?? [],
+-                  };
+-                }
++                    return {
++                      type: 'output_text',
++                      text: item.text,
++                      annotations: textItem.annotations ?? [],
++                    };
++                  }
+ 
+-                if (item.type === 'output_text' || item.type === 'refusal') {
+-                  return item;
+-                }
++                  if (item.type === 'output_text' || item.type === 'refusal') {
++                    return item;
++                  }
+ 
+-                return [];
+-              }),
++                  return [];
++                }),
+         } as ResponsesInputItem);
+ 
+         const functionCallIds = additional_kwargs[_FUNCTION_CALL_IDS_MAP_KEY];
+ 
+-        if (isAIMessage(lcMsg) && !!lcMsg.tool_calls?.length) {
++        if (
++          isAIMessage(lcMsg) &&
++          lcMsg.tool_calls != null &&
++          lcMsg.tool_calls.length > 0
++        ) {
+           input.push(
+             ...lcMsg.tool_calls.map(
+               (toolCall): ResponsesInputItem => ({
+@@ -741,7 +752,9 @@ export function _convertMessagesToOpenAIResponsesParams(
+                   MAX_PROVIDER_TOOL_CALL_INPUT_CHARS
+                 ),
+                 call_id: toolCall.id!,
+-                ...(zdrEnabled ? { id: functionCallIds?.[toolCall.id!] } : {}),
++                ...(zdrEnabled === true
++                  ? { id: functionCallIds?.[toolCall.id!] }
++                  : {}),
+               })
+             )
+           );
+@@ -753,7 +766,9 @@ export function _convertMessagesToOpenAIResponsesParams(
+                 name: toolCall.function.name,
+                 call_id: toolCall.id,
+                 arguments: toolCall.function.arguments,
+-                ...(zdrEnabled ? { id: functionCallIds?.[toolCall.id] } : {}),
++                ...(zdrEnabled === true
++                  ? { id: functionCallIds?.[toolCall.id] }
++                  : {}),
+               })
+             )
+           );
+@@ -786,7 +801,7 @@ export function _convertMessagesToOpenAIResponsesParams(
+         return input;
+       }
+ 
+-      if (role === 'user' || role === 'system' || role === 'developer') {
++      if (['user', 'system', 'developer'].includes(role)) {
+         if (typeof lcMsg.content === 'string') {
+           return { type: 'message', role, content: lcMsg.content };
+         }
+@@ -853,6 +868,7 @@ export function _convertMessagesToOpenAIResponsesParams(
+         return messages;
+       }
+ 
++      // eslint-disable-next-line no-console -- Preserve diagnostics for unsupported provider roles.
+       console.warn(
+         `Unsupported role found when converting to OpenAI Responses API: ${role}`
+       );
+@@ -919,7 +935,7 @@ function _convertOpenAIResponsesMessageToBaseMessage(
+             };
+           }
+ 
+-          if (part.type === 'refusal') {
++          if ('refusal' in part) {
+             additional_kwargs.refusal = part.refusal;
+             return [];
+           }
+@@ -949,7 +965,7 @@ function _convertOpenAIResponsesMessageToBaseMessage(
+       }
+ 
+       additional_kwargs[_FUNCTION_CALL_IDS_MAP_KEY] ??= {};
+-      if (item.id) {
++      if (item.id != null && item.id !== '') {
+         additional_kwargs[_FUNCTION_CALL_IDS_MAP_KEY][item.call_id] = item.id;
+       }
+     } else if (item.type === 'reasoning') {
+@@ -1090,13 +1106,13 @@ export function _convertOpenAIResponsesDeltaToBaseMessageChunk(
+     'item' in chunk &&
+     chunk.item.type === 'reasoning'
+   ) {
+-    const summary: ChatOpenAIReasoningSummary['summary'] | undefined = chunk
+-      .item.summary
+-      ? chunk.item.summary.map((s, index) => ({
+-        ...s,
+-        index,
+-      }))
+-      : undefined;
++    const summary: ChatOpenAIReasoningSummary['summary'] | undefined =
++      Array.isArray(chunk.item.summary)
++        ? chunk.item.summary.map((s, index) => ({
++            ...s,
++            index,
++          }))
++        : undefined;
+ 
+     additional_kwargs.reasoning = {
+       // We only capture ID in the first chunk or else the concatenated result of all chunks will
+diff --git a/src/llm/openai/utils/messages.test.ts b/src/llm/openai/utils/messages.test.ts
+index 4cdefa639d4c2c576807a211c64f89d01dbe7afd..db43f69c7532c3bb07db45b1b0ab619a9ce9cdaf 100644
+--- a/src/llm/openai/utils/messages.test.ts
++++ b/src/llm/openai/utils/messages.test.ts
+@@ -3,7 +3,10 @@ import {
+   _convertMessagesToOpenAIParams,
+   _convertMessagesToOpenAIResponsesParams,
+ } from './index';
+-import { calculateMaxToolCallInputChars, HARD_MAX_TOOL_RESULT_CHARS } from '@/utils/truncation';
++import {
++  calculateMaxToolCallInputChars,
++  HARD_MAX_TOOL_RESULT_CHARS,
++} from '@/utils/truncation';
+ 
+ describe('Responses reasoning summaries', () => {
+   it.each([
+diff --git a/src/messages/__tests__/recency.test.ts b/src/messages/__tests__/recency.test.ts
+index 9cd6210c0c13fcaa1cb80e1bc9f08a39aeb9924f..4d70ef26c3b75e459272742922d16d9e1225f901 100644
+--- a/src/messages/__tests__/recency.test.ts
++++ b/src/messages/__tests__/recency.test.ts
+@@ -865,31 +865,73 @@ describe('splitAtRecencyBoundary', () => {
+ });
+ 
+ describe('pruned windows that begin inside a tool-running turn', () => {
+-  const units = (native: boolean): BaseMessage[] => Array.from({length: 4}, (_, i) => native ? [
+-    new AIMessage({content: [{type: 'tool_use', id: `call-${i}`, name: 'search', input: {}}]}),
+-    new HumanMessage({content: [{type: 'tool_result', tool_use_id: `call-${i}`, content: `result ${i}`}]}),
+-  ] : [
+-    new AIMessage({content: '', tool_calls: [{id: `call-${i}`, name: 'search', args: {}}]}),
+-    new ToolMessage({content: `result ${i}`, tool_call_id: `call-${i}`}),
+-  ]).flat();
+-
+-  it.each([false, true])('retains a bounded, paired tool tail without a user message (native=%s)', (native) => {
+-    const messages = units(native);
+-    const split = splitAtRecencyBoundary(messages, {turns: 2, tokens: 30, tokenCounter: () => 10});
+-    expect(split.head).toEqual(messages.slice(0, -2));
+-    expect(split.tail).toEqual(messages.slice(-2));
+-    expect(split.usedIntraTurnFallback).toBe(true);
+-  });
++  const units = (native: boolean): BaseMessage[] =>
++    Array.from({ length: 4 }, (_, i) =>
++      native
++        ? [
++            new AIMessage({
++              content: [
++                {
++                  type: 'tool_use',
++                  id: `call-${i}`,
++                  name: 'search',
++                  input: {},
++                },
++              ],
++            }),
++            new HumanMessage({
++              content: [
++                {
++                  type: 'tool_result',
++                  tool_use_id: `call-${i}`,
++                  content: `result ${i}`,
++                },
++              ],
++            }),
++          ]
++        : [
++            new AIMessage({
++              content: '',
++              tool_calls: [{ id: `call-${i}`, name: 'search', args: {} }],
++            }),
++            new ToolMessage({
++              content: `result ${i}`,
++              tool_call_id: `call-${i}`,
++            }),
++          ]
++    ).flat();
++
++  it.each([false, true])(
++    'retains a bounded, paired tool tail without a user message (native=%s)',
++    (native) => {
++      const messages = units(native);
++      const split = splitAtRecencyBoundary(messages, {
++        turns: 2,
++        tokens: 30,
++        tokenCounter: () => 10,
++      });
++      expect(split.head).toEqual(messages.slice(0, -2));
++      expect(split.tail).toEqual(messages.slice(-2));
++      expect(split.usedIntraTurnFallback).toBe(true);
++    }
++  );
+ 
+   it('retains an entire indivisible newest exchange when its budget is smaller', () => {
+     const messages = units(false).slice(-2);
+-    const split = splitAtRecencyBoundary(messages, {tokens: 5, tokenCounter: () => 10});
++    const split = splitAtRecencyBoundary(messages, {
++      tokens: 5,
++      tokenCounter: () => 10,
++    });
+     expect(split.tail).toEqual(messages);
+   });
+ 
+   it('honors an explicitly disabled recent tail', () => {
+     const messages = units(false);
+-    const split = splitAtRecencyBoundary(messages, {turns: 0, tokens: 30, tokenCounter: () => 10});
++    const split = splitAtRecencyBoundary(messages, {
++      turns: 0,
++      tokens: 30,
++      tokenCounter: () => 10,
++    });
+     expect(split.head).toBe(messages);
+     expect(split.tail).toEqual([]);
+   });
+diff --git a/src/messages/format.ts b/src/messages/format.ts
+index df39a34aa013fe59b4428e68eb2f952864d44a73..2195f604d074b7f0fee1f185b5ade07a5e583980 100644
+--- a/src/messages/format.ts
++++ b/src/messages/format.ts
+@@ -42,6 +42,7 @@ import type {
+   ProviderMessageProvenancePart,
+ } from './provenance';
+ import type { ProviderToolCallIndex } from './toolResultTypes';
++import type { SkillBody } from './skillCarrier';
+ import {
+   appendProviderToolCallDescriptor,
+   consumeProviderToolResultPair,
+@@ -86,6 +87,8 @@ import { toLangChainContent, toLangChainMessageFields } from './langchain';
+ import { flattenLegacyContent, isLegacyConvertible } from './content';
+ import { HARD_MAX_TOOL_RESULT_CHARS } from '@/utils/truncation';
+ import { isReasoningContentBlock } from './reasoningTypes';
++import { getAssistantTextPhase } from './assistantPhase';
++import { buildSkillCarrierText } from './skillCarrier';
+ import { emitAgentLog } from '@/utils/events';
+ 
+ interface MediaMessageParams {
+@@ -1816,6 +1819,21 @@ function formatAssistantMessage(
+           }
+         }
+       }
++      if (
++        part.type === ContentTypes.TEXT &&
++        currentContent.length > 0 &&
++        getAssistantTextPhase(part) !==
++          getAssistantTextPhase(currentContent[currentContent.length - 1]) &&
++        (getAssistantTextPhase(part) != null ||
++          currentContent.some((item) => getAssistantTextPhase(item) != null))
++      ) {
++        lastAIMessage = appendAIMessage(
++          toLangChainContent(currentContent),
++          currentContentProvenance
++        );
++        currentContent = [];
++        currentContentProvenance = createProviderMessageProvenanceBuilder();
++      }
+       if (part.type === ContentTypes.TEXT && part.tool_call_ids) {
+         /*
+         If there's pending content, it needs to be aggregated as a single string to prepare for tool calls.
+@@ -1823,7 +1841,12 @@ function formatAssistantMessage(
+         */
+         if (currentContent.length > 0) {
+           if (
+-            currentContent.some((content) => content.type !== ContentTypes.TEXT)
++            currentContent.some(
++              (content) =>
++                content.type !== ContentTypes.TEXT ||
++                getAssistantTextPhase(content) != null
++            ) ||
++            getAssistantTextPhase(part) != null
+           ) {
+             currentContent.push(part);
+             appendCurrentContentProvenance(sourcePartIndices, 'model', true);
+@@ -1854,7 +1877,9 @@ function formatAssistantMessage(
+         }
+         // Create a new AIMessage with this text and prepare for tool calls
+         lastAIMessage = appendAIMessage(
+-          getTextContent(part),
++          getAssistantTextPhase(part) != null
++            ? toLangChainContent([part])
++            : getTextContent(part),
+           createSourceProvenanceBuilder(sourcePartIndices, 'model', true)
+         );
+       } else if (part.type === ContentTypes.TOOL_CALL) {
+@@ -2044,7 +2069,11 @@ function formatAssistantMessage(
+         */
+         if (currentContent.length > 0) {
+           if (
+-            currentContent.some((content) => content.type !== ContentTypes.TEXT)
++            currentContent.some(
++              (content) =>
++                content.type !== ContentTypes.TEXT ||
++                getAssistantTextPhase(content) != null
++            )
+           ) {
+             appendAIMessage(
+               toLangChainContent(currentContent),
+@@ -2125,7 +2154,10 @@ function formatAssistantMessage(
+   if (hasReasoning && currentContent.length > 0) {
+     let content = '';
+     for (const part of currentContent) {
+-      if (part.type !== ContentTypes.TEXT) {
++      if (
++        part.type !== ContentTypes.TEXT ||
++        getAssistantTextPhase(part) != null
++      ) {
+         appendAIMessage(
+           toLangChainContent(currentContent),
+           currentContentProvenance
+@@ -2817,7 +2849,7 @@ export const formatAgentMessages = (
+   /** Pre-resolved skill bodies keyed by skill name. When present, HumanMessages
+    *  are reconstructed after skill ToolMessages to restore skill instructions
+    *  that were only in LangGraph state during the original run. */
+-  skills?: Map<string, string>,
++  skills?: ReadonlyMap<string, SkillBody>,
+   options?: FormatAgentMessagesOptions
+ ): {
+   messages: Array<
+@@ -3197,16 +3229,24 @@ export const formatAgentMessages = (
+         if (skipSkillBodyNames != null && skipSkillBodyNames.has(skillName)) {
+           continue;
+         }
+-        const body = skills?.get(skillName) ?? '';
++        const resolved = skills?.get(skillName) ?? '';
++        const body = typeof resolved === 'string' ? resolved : resolved.body;
++        const source = {
++          ...(typeof resolved === 'string' ? {} : resolved),
++          skillName,
++          historical: true,
++        };
+         if (body) {
+           const skillMessage = withMessageRole(
+             new HumanMessage({
+-              content: body,
++              content: buildSkillCarrierText(body, source),
+               additional_kwargs: {
+                 role: 'user',
+                 isMeta: true,
+                 source: 'skill',
+                 skillName,
++                skillId: source.skillId,
++                skillVersion: source.skillVersion,
+               },
+             }),
+             'user'
+@@ -3688,9 +3728,7 @@ function getSyntheticProviderContextProvenanceParts(
+     }
+     for (const attribution of source.additionalAttributions ?? []) {
+       const sourceMessageId =
+-        sourceMessageIds.length === 1
+-          ? sourceMessageIds[0]
+-          : undefined;
++        sourceMessageIds.length === 1 ? sourceMessageIds[0] : undefined;
+       const retainedSourceId =
+         retainedSourceIds.size === 1
+           ? retainedSourceIds.values().next().value
+diff --git a/src/messages/formatAgentMessages.skills.test.ts b/src/messages/formatAgentMessages.skills.test.ts
+index 2c6320fbd886b83498c764cc8f550e5f01dec919..7ca456f31f8662886f0509a07cb2083e1456791e 100644
+--- a/src/messages/formatAgentMessages.skills.test.ts
++++ b/src/messages/formatAgentMessages.skills.test.ts
+@@ -21,6 +21,26 @@ function skillToolCall(
+ }
+ 
+ describe('formatAgentMessages skill body reconstruction', () => {
++  it('retains resolved source identity and marks the historical invocation version unknown', () => {
++    const { messages } = formatAgentMessages(
++      [{ role: 'assistant', content: [skillToolCall('call', 'fixture')] }],
++      undefined,
++      undefined,
++      new Map([
++        [
++          'fixture',
++          { body: 'original body', skillId: 'known-id', skillVersion: 4 },
++        ],
++      ])
++    );
++    const skill = messages.find(
++      (message) => message.additional_kwargs.source === 'skill'
++    );
++    expect(skill?.content).toContain('"id":"known-id"');
++    expect(skill?.content).toContain('"version":4');
++    expect(skill?.content).toContain('"historicalVersion":"unknown"');
++    expect(String(skill?.content).match(/original body/g)).toHaveLength(1);
++  });
+   const skillBodies = new Map([
+     ['pdf-analyzer', '# PDF Analyzer\nAnalyze PDF files step by step.'],
+     ['code-review', '# Code Review\nReview the code for issues.'],
+@@ -56,10 +76,11 @@ describe('formatAgentMessages skill body reconstruction', () => {
+       expect(messages.length).toBeGreaterThanOrEqual(4);
+       const last = messages[messages.length - 1];
+       expect(last).toBeInstanceOf(HumanMessage);
+-      expect(last.content).toBe(
++      expect(last.content).toContain(
+         '# PDF Analyzer\nAnalyze PDF files step by step.'
+       );
+       expect((last as HumanMessage).additional_kwargs.source).toBe('skill');
++      expect(last.content).toContain('"historicalVersion":"unknown"');
+       expect((last as HumanMessage).additional_kwargs.skillName).toBe(
+         'pdf-analyzer'
+       );
+@@ -132,7 +153,7 @@ describe('formatAgentMessages skill body reconstruction', () => {
+           (m as HumanMessage).additional_kwargs.source === 'skill'
+       );
+       expect(injected).toHaveLength(1);
+-      expect(injected[0].content).toBe(
++      expect(injected[0].content).toContain(
+         '# Code Review\nReview the code for issues.'
+       );
+     });
+@@ -404,7 +425,7 @@ describe('formatAgentMessages skill body reconstruction', () => {
+       let assistantTotal = 0;
+       for (const [idx, count] of Object.entries(indexTokenCountMap!)) {
+         if (Number(idx) > 0 && Number(idx) < injectedIndex) {
+-          assistantTotal += count ?? 0;
++          assistantTotal += count;
+         }
+       }
+       expect(assistantTotal).toBe(500);
+diff --git a/src/messages/index.ts b/src/messages/index.ts
+index a29d3293b99fab796561e2fb6a81d9322d78e1eb..4da3b2c0cae66568aa6de5031632048adf75e28b 100644
+--- a/src/messages/index.ts
++++ b/src/messages/index.ts
+@@ -8,6 +8,8 @@ export * from './anthropicToolCache';
+ export * from './content';
+ export * from './tools';
+ export * from './injected';
++export * from './skillCarrier';
++export * from './structure';
+ export * from './alternation';
+ export * from './handoffCue';
+ export * from './contextPruning';
+diff --git a/src/messages/injected.ts b/src/messages/injected.ts
+index 6035784771bca5425da9bc481441a09640312647..a29c197681fffb10ce275a97db417568ef9612d6 100644
+--- a/src/messages/injected.ts
++++ b/src/messages/injected.ts
+@@ -3,6 +3,7 @@ import { HumanMessage } from '@langchain/core/messages';
+ import type { BaseMessage } from '@langchain/core/messages';
+ import type { InjectedMessage } from '@/types/tools';
+ import { setProviderMessageProvenance } from './provenance';
++import { buildSkillCarrierText } from './skillCarrier';
+ import { toLangChainContent } from './langchain';
+ import { ContentTypes } from '@/common';
+ 
+@@ -70,9 +71,16 @@ export function convertInjectedMessages(
+     if (msg.isMeta != null) additional_kwargs.isMeta = msg.isMeta;
+     if (msg.source != null) additional_kwargs.source = msg.source;
+     if (msg.skillName != null) additional_kwargs.skillName = msg.skillName;
++    if (msg.skillId != null) additional_kwargs.skillId = msg.skillId;
++    if (msg.skillVersion != null)
++      additional_kwargs.skillVersion = msg.skillVersion;
+ 
+     const message = new HumanMessage({
+-      content: toLangChainContent(msg.content),
++      content: toLangChainContent(
++        msg.source === 'skill' && typeof msg.content === 'string'
++          ? buildSkillCarrierText(msg.content, msg)
++          : msg.content
++      ),
+       additional_kwargs,
+     });
+     setProviderMessageProvenance(message, [
+diff --git a/src/messages/recency.ts b/src/messages/recency.ts
+index 8457f8dd2601497750304f5db2a015bb55febb90..389ececf55c0872b1f376969e68ec4095928b6bd 100644
+--- a/src/messages/recency.ts
++++ b/src/messages/recency.ts
+@@ -456,7 +456,7 @@ function inspectPairingBalancedWindow(
+     }
+   }
+   while (starts[starts.length - 1] > newestExchangeStart) starts.pop();
+-  return {starts, hasCompletedToolCalls};
++  return { starts, hasCompletedToolCalls };
+ }
+ 
+ /** Safe suffix starts that keep the newest exchange and its source lineage. */
+@@ -473,12 +473,22 @@ function splitToolWindowAtRecencyBoundary(
+ ): RecencySplit | undefined {
+   const tokens = options.tokens ?? options.intraTurnTokens;
+   const count = options.tokenCounter;
+-  if (tokens == null || !Number.isFinite(tokens) || tokens <= 0 || count == null) return undefined;
+-  const {starts, hasCompletedToolCalls} = inspectPairingBalancedWindow(messages, options.provider);
++  if (
++    tokens == null ||
++    !Number.isFinite(tokens) ||
++    tokens <= 0 ||
++    count == null
++  )
++    return undefined;
++  const { starts, hasCompletedToolCalls } = inspectPairingBalancedWindow(
++    messages,
++    options.provider
++  );
+   if (!hasCompletedToolCalls) return undefined;
+   const suffixTokens = new Array<number>(messages.length + 1);
+   suffixTokens[messages.length] = 0;
+-  for (let i = messages.length - 1; i >= 0; i--) suffixTokens[i] = suffixTokens[i + 1] + count(messages[i]);
++  for (let i = messages.length - 1; i >= 0; i--)
++    suffixTokens[i] = suffixTokens[i + 1] + count(messages[i]);
+   let tailStartIndex = starts[starts.length - 1];
+   for (const start of starts) {
+     if (suffixTokens[start] <= tokens) {
+@@ -487,7 +497,10 @@ function splitToolWindowAtRecencyBoundary(
+     }
+   }
+   return {
+-    head: messages.slice(0, tailStartIndex), tail: messages.slice(tailStartIndex),
+-    tailStartIndex, tailTurnCount: 0, usedIntraTurnFallback: true,
++    head: messages.slice(0, tailStartIndex),
++    tail: messages.slice(tailStartIndex),
++    tailStartIndex,
++    tailTurnCount: 0,
++    usedIntraTurnFallback: true,
+   };
+ }
+diff --git a/src/messages/reducer.ts b/src/messages/reducer.ts
+index d3479fa71432626908c4025a04ea37dbb8c2e819..af8f6abe953ea6e426072fe5e3b626bd36d29d12 100644
+--- a/src/messages/reducer.ts
++++ b/src/messages/reducer.ts
+@@ -70,7 +70,7 @@ export function messagesStateReducer(
+   const rightMessages = coerceMessages(rightArray as BaseMessageLike[]);
+   // assign missing ids
+   for (const m of leftMessages) {
+-    if (m.id === null || m.id === undefined) {
++    if (m.id == null) {
+       m.id = v4();
+       m.lc_kwargs.id = m.id;
+     }
+@@ -79,7 +79,7 @@ export function messagesStateReducer(
+   let removeAllIdx: number | undefined;
+   for (let i = 0; i < rightMessages.length; i += 1) {
+     const m = rightMessages[i];
+-    if (m.id === null || m.id === undefined) {
++    if (m.id == null) {
+       m.id = v4();
+       m.lc_kwargs.id = m.id;
+     }
+diff --git a/src/messages/skillCarrier.ts b/src/messages/skillCarrier.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f31822ffdf7405ecf3571fde20026df7b1ec9807
+--- /dev/null
++++ b/src/messages/skillCarrier.ts
+@@ -0,0 +1,28 @@
++export interface SkillSource {
++  skillName?: string;
++  skillId?: string;
++  skillVersion?: number;
++  historical?: boolean;
++}
++
++export type SkillBody = string | ({ body: string } & SkillSource);
++
++/** Model-visible provenance; the body remains user-role reference material. */
++export function buildSkillCarrierText(
++  body: string,
++  source: SkillSource
++): string {
++  const header = `[Skill source ${JSON.stringify({
++    name: source.skillName ?? null,
++    id: source.skillId ?? null,
++    version: source.skillVersion ?? 'unknown',
++    ...(source.historical === true ? { historicalVersion: 'unknown' } : {}),
++  })}]\n`;
++  const provenance =
++    'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n';
++  const history =
++    source.historical === true
++      ? 'This is the currently resolved content; the revision used by the original historical invocation is unknown.\n'
++      : '';
++  return `${header}${provenance}${history}${body}\n[End skill source]`;
++}
+diff --git a/src/messages/structure.ts b/src/messages/structure.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0b0f00dd8327dc60b716fd5a4408f6d135439af6
+--- /dev/null
++++ b/src/messages/structure.ts
+@@ -0,0 +1,49 @@
++import type { BaseMessage } from '@langchain/core/messages';
++
++export interface MessageStructureProjection {
++  role: 'human' | 'ai' | 'system' | 'tool' | 'other';
++  source: 'skill' | 'steer' | 'hook' | 'system' | 'unknown';
++  hasSkillId: boolean;
++  hasSkillVersion: boolean;
++  blocks: {
++    type: 'text' | 'other';
++    phase: 'commentary' | 'final_answer' | 'unknown';
++  }[];
++}
++
++function projectRole(role: string): MessageStructureProjection['role'] {
++  if (role === 'human' || role === 'ai' || role === 'system' || role === 'tool') return role;
++  return 'other';
++}
++
++/** Safe offline diagnostic projection. Never includes caller-provided strings. */
++export function projectMessageStructure(
++  messages: readonly BaseMessage[]
++): MessageStructureProjection[] {
++  return messages.map((message) => {
++    const source = message.additional_kwargs.source;
++    return {
++      role: projectRole(message.getType()),
++      source:
++        source === 'skill' ||
++        source === 'steer' ||
++        source === 'hook' ||
++        source === 'system'
++          ? source
++          : 'unknown',
++      hasSkillId: typeof message.additional_kwargs.skillId === 'string',
++      hasSkillVersion:
++        typeof message.additional_kwargs.skillVersion === 'number',
++      blocks:
++        typeof message.content === 'string'
++          ? [{ type: 'text', phase: 'unknown' }]
++          : message.content.map((block) => ({
++            type: block.type === 'text' ? 'text' : 'other',
++            phase:
++                block.phase === 'commentary' || block.phase === 'final_answer'
++                  ? block.phase
++                  : 'unknown',
++          })),
++    };
++  });
++}
+diff --git a/src/stream.ts b/src/stream.ts
+index 3e5ae6bf73209dd9b465db8d416d6cc5e915fc93..b654bada3d73ee38cee9b24d06e1ef9eb8237466 100644
+--- a/src/stream.ts
++++ b/src/stream.ts
+@@ -34,6 +34,7 @@ import {
+   LOCAL_CODING_BUNDLE_NAMES,
+ } from '@/common';
+ import {
++  getAssistantTextPhase,
+   getMessageCreationContentMetadata,
+   splitAssistantTextContentByPhase,
+ } from '@/messages/assistantPhase';
+@@ -725,11 +726,11 @@ function createEagerToolExecutionPlan(args: {
+ 
+   const unstartedToolCalls = skipExisting
+     ? toolCalls.filter((toolCall) => {
+-      if (toolCall.id == null || toolCall.id === '') {
+-        return true;
+-      }
+-      return !graph.eagerEventToolExecutions.has(toolCall.id);
+-    })
++        if (toolCall.id == null || toolCall.id === '') {
++          return true;
++        }
++        return !graph.eagerEventToolExecutions.has(toolCall.id);
++      })
+     : toolCalls;
+   // Drop host-excluded tools only AFTER the batch-level guards above have run
+   // against the full batch, so excluding a call never hides a sibling direct
+@@ -1145,8 +1146,8 @@ function recordEagerToolCallChunks(args: {
+     const existing =
+       previous == null || shouldReset
+         ? {
+-          argsText: '',
+-        }
++            argsText: '',
++          }
+         : previous;
+     const id = incomingId ?? existing.id;
+     const name = incomingName ?? existing.name;
+@@ -2307,6 +2308,7 @@ export function createContentAggregator(): t.ContentAggregatorResult {
+ 
+   const contentParts: Array<t.MessageContentComplex | undefined> = [];
+   const stepMap = new Map<string, t.RunStep>();
++  const textStepIndex = new Map<string, number>();
+   const toolCallContentIndexMap = new Map<string, number>();
+   const sourceContentIndexMap = new Map<number, number>();
+   const toolStepContentMap = new Map<string, ToolStepContentState>();
+@@ -2316,7 +2318,11 @@ export function createContentAggregator(): t.ContentAggregatorResult {
+   // Track agentId and groupId for each content index (applied to content parts)
+   const contentMetaMap = new Map<
+     number,
+-    { agentId?: string; groupId?: number }
++    {
++      agentId?: string;
++      groupId?: number;
++      phase?: t.MessageContentComplex['phase'];
++    }
+   >();
+   /** A delta's content may carry several parts (e.g. Google server-side tool
+    *  chunks emit multiple reasoning entries at once); every entry must reach
+@@ -2433,12 +2439,17 @@ export function createContentAggregator(): t.ContentAggregatorResult {
+     return contentIndex;
+   };
+   const setContentMeta = (index: number, runStep: t.RunStep): void => {
++    const phase =
++      runStep.stepDetails.type === StepTypes.MESSAGE_CREATION
++        ? runStep.stepDetails.message_creation.phase
++        : undefined;
+     const hasAgentId = runStep.agentId != null && runStep.agentId !== '';
+     const hasGroupId = runStep.groupId != null;
+-    if (!hasAgentId && !hasGroupId) {
++    if (!hasAgentId && !hasGroupId && phase == null) {
+       return;
+     }
+     const existingMeta = contentMetaMap.get(index) ?? {};
++    if (phase != null) existingMeta.phase = phase;
+     if (hasAgentId) {
+       existingMeta.agentId = runStep.agentId;
+     }
+@@ -2453,6 +2464,13 @@ export function createContentAggregator(): t.ContentAggregatorResult {
+       return;
+     }
+     const meta = contentMetaMap.get(index);
++    if (
++      meta?.phase != null &&
++      contentPart.type === ContentTypes.TEXT &&
++      getAssistantTextPhase(contentPart) == null
++    ) {
++      contentPart.phase = meta.phase;
++    }
+     if (meta?.agentId != null) {
+       contentPart.agentId = meta.agentId;
+     }
+@@ -2467,7 +2485,7 @@ export function createContentAggregator(): t.ContentAggregatorResult {
+     finalUpdate = false
+   ): void => {
+     if (!contentPart) {
+-      console.warn('No content part found in \'updateContent\'');
++      console.warn("No content part found in 'updateContent'");
+       return;
+     }
+     const partType = contentPart.type ?? '';
+@@ -2500,13 +2518,18 @@ export function createContentAggregator(): t.ContentAggregatorResult {
+ 
+     if (
+       partType.startsWith(ContentTypes.TEXT) &&
+-      (incomingText !== undefined || incomingCitations !== undefined)
++      (incomingText !== undefined ||
++        incomingCitations !== undefined ||
++        getAssistantTextPhase(contentPart) != null)
+     ) {
+-      // TODO: update this!!
+       const currentContent = contentParts[index] as t.MessageDeltaUpdate;
++      const phase =
++        getAssistantTextPhase(contentPart) ??
++        getAssistantTextPhase(currentContent);
+       const update: t.MessageDeltaUpdate = {
+         type: ContentTypes.TEXT,
+         text: (currentContent.text || '') + (incomingText ?? ''),
++        ...(phase == null ? {} : { phase }),
+       };
+ 
+       if (contentPart.tool_call_ids) {
+@@ -2793,7 +2816,20 @@ export function createContentAggregator(): t.ContentAggregatorResult {
+       for (const contentPart of getDeltaContentParts(
+         messageDelta.delta.content
+       )) {
+-        updateContent(runStep.index, contentPart);
++        let index = textStepIndex.get(runStep.id) ?? runStep.index;
++        const phase = getAssistantTextPhase(contentPart);
++        const previousPhase =
++          contentParts[index] == null
++            ? undefined
++            : getAssistantTextPhase(contentParts[index]!);
++        if (phase != null && previousPhase != null && phase !== previousPhase) {
++          index = allocateContentIndex();
++          setContentMeta(index, runStep);
++          const meta = contentMetaMap.get(index) ?? {};
++          contentMetaMap.set(index, { ...meta, phase });
++        }
++        textStepIndex.set(runStep.id, index);
++        updateContent(index, contentPart);
+       }
+     } else if (
+       event === GraphEvents.ON_AGENT_UPDATE &&
+diff --git a/src/tools/__tests__/SkillTool.test.ts b/src/tools/__tests__/SkillTool.test.ts
+index 05eb472112d0c06526d64aeea64e922dfdb2be4f..ed0346a8b43defe58c49a5bb6716e29b59421fc0 100644
+--- a/src/tools/__tests__/SkillTool.test.ts
++++ b/src/tools/__tests__/SkillTool.test.ts
+@@ -178,7 +178,11 @@ describe('SkillTool', () => {
+       // Injected messages come AFTER
+       const second = messages[1] as HumanMessage;
+       expect(second).toBeInstanceOf(HumanMessage);
+-      expect(second.content).toBe('Injected skill body content');
++      expect(second.content).toBe(
++        '[Skill source {"name":"test-skill","id":null,"version":"unknown"}]\n' +
++          'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n' +
++          'Injected skill body content\n[End skill source]'
++      );
+       expect(second.additional_kwargs.role).toBe('user');
+       expect(second.additional_kwargs.isMeta).toBe(true);
+       expect(second.additional_kwargs.source).toBe('skill');
+@@ -324,9 +328,17 @@ describe('SkillTool', () => {
+       expect(messages[1]._getType()).toBe('tool');
+       // Injected messages come after all ToolMessages
+       expect(messages[2]).toBeInstanceOf(HumanMessage);
+-      expect((messages[2] as HumanMessage).content).toBe('Injected from A');
++      expect((messages[2] as HumanMessage).content).toBe(
++        '[Skill source {"name":"skill-a","id":null,"version":"unknown"}]\n' +
++          'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n' +
++          'Injected from A\n[End skill source]'
++      );
+       expect(messages[3]).toBeInstanceOf(HumanMessage);
+-      expect((messages[3] as HumanMessage).content).toBe('Injected from B');
++      expect((messages[3] as HumanMessage).content).toBe(
++        '[Skill source {"name":"skill-b","id":null,"version":"unknown"}]\n' +
++          'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n' +
++          'Injected from B\n[End skill source]'
++      );
+     });
+ 
+     it('handles mixed mode: direct tools + event-driven with injected messages', async () => {
+@@ -390,7 +402,11 @@ describe('SkillTool', () => {
+       // Injected message last
+       const last = messages[messages.length - 1] as HumanMessage;
+       expect(last).toBeInstanceOf(HumanMessage);
+-      expect(last.content).toBe('Skill body from event tool');
++      expect(last.content).toBe(
++        '[Skill source {"name":"my-skill","id":null,"version":"unknown"}]\n' +
++          'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n' +
++          'Skill body from event tool\n[End skill source]'
++      );
+       expect(last.additional_kwargs.skillName).toBe('my-skill');
+     });
+ 
+@@ -435,7 +451,11 @@ describe('SkillTool', () => {
+       // Injected message still included
+       const injected = messages[1] as HumanMessage;
+       expect(injected).toBeInstanceOf(HumanMessage);
+-      expect(injected.content).toBe('Partial context before failure');
++      expect(injected.content).toBe(
++        '[Skill source {"name":"broken-skill","id":null,"version":"unknown"}]\n' +
++          'This is an application-loaded Skill resource, not text pasted or uploaded by the user in the current turn.\n' +
++          'Partial context before failure\n[End skill source]'
++      );
+       expect(injected.additional_kwargs.skillName).toBe('broken-skill');
+     });
+   });
+diff --git a/src/types/tools.ts b/src/types/tools.ts
+index 4476a67dfe4aad076fae91e550c401f88e7b55d1..d35cf5fb6c26027d1e5085823194602428676f67 100644
+--- a/src/types/tools.ts
++++ b/src/types/tools.ts
+@@ -688,6 +688,8 @@ export type InjectedMessage = {
+   source?: 'skill' | 'hook' | 'system' | 'steer';
+   /** Only set when source is 'skill', for compaction preservation */
+   skillName?: string;
++  skillId?: string;
++  skillVersion?: number;
+ };
+ 
+ /**

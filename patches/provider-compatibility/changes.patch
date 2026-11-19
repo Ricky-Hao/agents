@@ -1,0 +1,725 @@
+diff --git a/src/agents/__tests__/AgentContext.bedrock.live.test.ts b/src/agents/__tests__/AgentContext.bedrock.live.test.ts
+index 83e9ba0e639cc4c09b90764a7bedd66fbc966009..81bd2f6769787c517781fd272a9ad3e9d90e52ed 100644
+--- a/src/agents/__tests__/AgentContext.bedrock.live.test.ts
++++ b/src/agents/__tests__/AgentContext.bedrock.live.test.ts
+@@ -257,11 +257,9 @@ function addLatestUserOnlyBedrockCacheControl(
+     }
+ 
+     let workingContent: MessageContentComplex[];
+-    let modified = false;
+-
+     if (hasArrayContent) {
+       workingContent = stripCacheMarkers(content as MessageContentComplex[]);
+-      modified = workingContent.length !== content.length;
++      let modified = workingContent.length !== content.length;
+       const lastTextIndex = workingContent.findLastIndex((block) => {
+         const type = (block as { type?: string }).type;
+         const text = (block as { text?: string }).text;
+diff --git a/src/agents/__tests__/AgentContext.overflow.test.ts b/src/agents/__tests__/AgentContext.overflow.test.ts
+index 310b533a4bc5e975a6f09f4227cf8a6991e1befe..4cd90a960eaadf3e1e52bcae2a02ff3963b0d7a5 100644
+--- a/src/agents/__tests__/AgentContext.overflow.test.ts
++++ b/src/agents/__tests__/AgentContext.overflow.test.ts
+@@ -30,7 +30,7 @@ describe('AgentContext overflow recovery state', () => {
+ 
+   it('tracks input-ceiling units after correction and restores configured units on reset', () => {
+     const context = createContext(32_000);
+-    context.summarizationConfig = {contextBudgetMode: 'window'};
++    context.summarizationConfig = { contextBudgetMode: 'window' };
+     expect(context.summarizationBudgetMode).toBe('window');
+     context.applyContextBudgetCorrection(26_600);
+     expect(context.maxContextTokens).toBe(26_600);
+@@ -43,7 +43,7 @@ describe('AgentContext overflow recovery state', () => {
+ 
+   it('does not change budget units when an overflow supplies no numeric correction', () => {
+     const context = createContext(32_000);
+-    context.summarizationConfig = {contextBudgetMode: 'window'};
++    context.summarizationConfig = { contextBudgetMode: 'window' };
+     context.applyContextBudgetCorrection(undefined);
+     expect(context.summarizationBudgetMode).toBe('window');
+     context.reset();
+diff --git a/src/llm/anthropic/utils/output_parsers.ts b/src/llm/anthropic/utils/output_parsers.ts
+index fce211d2e9ceabc056d614e16ac34daa482b8f6a..82c8fd0da8a556a8d2fa2ecb49363074dcdd49b6 100644
+--- a/src/llm/anthropic/utils/output_parsers.ts
++++ b/src/llm/anthropic/utils/output_parsers.ts
+@@ -59,8 +59,6 @@ export class AnthropicToolsOutputParser<
+           result
+         );
+       }
+-    } else {
+-      parsedResult = result;
+     }
+     if (this.zodSchema === undefined) {
+       return parsedResult as T;
+@@ -92,12 +90,12 @@ export class AnthropicToolsOutputParser<
+       const tool = extractToolCalls(message.content)[0];
+       return tool;
+     });
+-    if (tools[0] === undefined) {
++    const tool = tools.at(0);
++    if (tool === undefined) {
+       throw new Error(
+         'No parseable tool calls provided to AnthropicToolsOutputParser.'
+       );
+     }
+-    const [tool] = tools;
+     const validatedResult = await this._validateResult(tool.args);
+     return validatedResult;
+   }
+diff --git a/src/llm/bedrock/cachePoints.ts b/src/llm/bedrock/cachePoints.ts
+index c28fdfc1a983fd4b2b588a0d83aef9f76f3c9319..3947f144ce9ea86247790ce1b864d6d9f67ea7c0 100644
+--- a/src/llm/bedrock/cachePoints.ts
++++ b/src/llm/bedrock/cachePoints.ts
+@@ -12,7 +12,6 @@ function isConverseCachePoint(block: unknown): boolean {
+     typeof block === 'object' &&
+       block !== null &&
+       'cachePoint' in block &&
+-      block.cachePoint &&
+       typeof block.cachePoint === 'object' &&
+       block.cachePoint !== null &&
+       'type' in block.cachePoint
+@@ -63,7 +62,7 @@ export function applyCachePointsToConversePayload(fields: {
+     const hasNovaToolBlock =
+       isNovaModel &&
+       lastContent.some(
+-        (block) =>
++        (block: unknown) =>
+           typeof block === 'object' &&
+           block !== null &&
+           ('toolResult' in block || 'toolUse' in block)
+diff --git a/src/llm/bedrock/index.ts b/src/llm/bedrock/index.ts
+index 665f1bcaefa3e8402812c94950059d1ece7e6eaf..d642313be4ad7993720e69bcb0a751b8fbf90a40 100644
+--- a/src/llm/bedrock/index.ts
++++ b/src/llm/bedrock/index.ts
+@@ -245,10 +245,10 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
+     const toolConfig =
+       this.promptCache === true && supportsBedrockToolCache(this.cacheModelId)
+         ? insertBedrockToolCachePoint(
+-          baseToolConfig,
+-          true,
+-          resolveBedrockPromptCacheTtl(this.promptCacheTtl, this.cacheModelId)
+-        )
++            baseToolConfig,
++            true,
++            resolveBedrockPromptCacheTtl(this.promptCacheTtl, this.cacheModelId)
++          )
+         : baseToolConfig;
+ 
+     /** Service tier from options or fall back to class-level setting */
+@@ -475,7 +475,7 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
+       const enrichChunk = this.enrichChunk.bind(this);
+       const source = (async function* (): AsyncGenerator<
+         SmoothItem<BedrockEmittedChunk>
+-        > {
++      > {
+         let sawEvent = false;
+         for await (const event of stream) {
+           sawEvent = true;
+diff --git a/src/llm/bedrock/openaiStream.test.ts b/src/llm/bedrock/openaiStream.test.ts
+index b6e1de2e5084e08ffe462d4b2fecc2bfec5e8a85..291f35285ce1d7576d1b623ba0b5aa10c4475d59 100644
+--- a/src/llm/bedrock/openaiStream.test.ts
++++ b/src/llm/bedrock/openaiStream.test.ts
+@@ -1,14 +1,14 @@
+-import { HumanMessage, AIMessageChunk } from '@langchain/core/messages';
+ import { expect, it, describe, jest } from '@jest/globals';
++import { HumanMessage, AIMessageChunk } from '@langchain/core/messages';
+ import type {
+   ConverseCommand,
+   ConverseStreamCommand,
+ } from '@aws-sdk/client-bedrock-runtime';
+-import { attemptInvoke, collectAttemptToolCalls } from '@/llm/invoke';
+ import {
+   CustomChatBedrockConverse,
+   BEDROCK_EMPTY_STREAM_MESSAGE,
+ } from './index';
++import { attemptInvoke, collectAttemptToolCalls } from '@/llm/invoke';
+ import { Providers } from '@/common';
+ 
+ const OPENAI_MODEL = 'global.openai.gpt-6.1-sol';
+diff --git a/src/llm/bedrock/utils/harmony.test.ts b/src/llm/bedrock/utils/harmony.test.ts
+index 029ebfa79923a548eee77e9fdd68e1d6d82fd3ea..4b119959a7e916d160dd7b4d4ce503607b97ebc3 100644
+--- a/src/llm/bedrock/utils/harmony.test.ts
++++ b/src/llm/bedrock/utils/harmony.test.ts
+@@ -1,20 +1,20 @@
++import { describe, it, expect } from '@jest/globals';
+ import {
+   AIMessage,
+   HumanMessage,
+   SystemMessage,
+   ToolMessage,
+ } from '@langchain/core/messages';
+-import { describe, it, expect } from '@jest/globals';
+ import type { ToolConfiguration } from '@aws-sdk/client-bedrock-runtime';
+ import type { BaseMessage } from '@langchain/core/messages';
+-import {
+-  isBedrockOpenAIModel,
+-  convertToConverseMessages,
+-} from './message_inputs';
+ import {
+   neutralizeHarmonyToolConfig,
+   neutralizeHarmonyControlTokens,
+ } from './harmony';
++import {
++  isBedrockOpenAIModel,
++  convertToConverseMessages,
++} from './message_inputs';
+ 
+ const OPENAI_MODEL = 'global.openai.gpt-6.1-sol';
+ const CLAUDE_MODEL = 'global.anthropic.claude-sonnet-5-5';
+diff --git a/src/llm/google/index.ts b/src/llm/google/index.ts
+index e1b8d937caceafa2d56508e97331a949f9ae164b..274f51943e6a83961d84636af5e63a76322469e8 100644
+--- a/src/llm/google/index.ts
++++ b/src/llm/google/index.ts
+@@ -235,10 +235,9 @@ export class CustomChatGoogleGenerativeAI extends ChatGoogleGenerativeAI {
+       total_tokens: usageMetadata.totalTokenCount ?? 0,
+     };
+ 
+-    if ((usageMetadata.cachedContentTokenCount ?? 0) > 0) {
+-      output.input_token_details ??= {};
+-      output.input_token_details.cache_read =
+-        usageMetadata.cachedContentTokenCount;
++    const cacheRead = usageMetadata.cachedContentTokenCount ?? 0;
++    if (cacheRead > 0) {
++      output.input_token_details = { cache_read: cacheRead };
+     }
+ 
+     // gemini-3-pro-preview has bracket based tracking of tokens per request
+@@ -247,17 +246,14 @@ export class CustomChatGoogleGenerativeAI extends ChatGoogleGenerativeAI {
+         0,
+         (usageMetadata.promptTokenCount ?? 0) - 200000
+       );
+-      const cachedOver200k = Math.max(
+-        0,
+-        (usageMetadata.cachedContentTokenCount ?? 0) - 200000
+-      );
++      const cachedOver200k = Math.max(0, cacheRead - 200000);
+       if (over200k > 0) {
+         output.input_token_details = {
+           ...output.input_token_details,
+           over_200k: over200k,
+         } as InputTokenDetails;
+       }
+-      if (cachedOver200k) {
++      if (cachedOver200k > 0) {
+         output.input_token_details = {
+           ...output.input_token_details,
+           cache_read_over_200k: cachedOver200k,
+@@ -285,11 +281,11 @@ export class CustomChatGoogleGenerativeAI extends ChatGoogleGenerativeAI {
+         ...toolConfig,
+         ...(functionCallingConfig?.mode === FunctionCallingMode.AUTO
+           ? {
+-            functionCallingConfig: {
+-              ...functionCallingConfig,
+-              mode: 'VALIDATED',
+-            },
+-          }
++              functionCallingConfig: {
++                ...functionCallingConfig,
++                mode: 'VALIDATED',
++              },
++            }
+           : {}),
+         includeServerSideToolInvocations: true,
+       } as ToolConfig;
+diff --git a/src/llm/google/utils/common.ts b/src/llm/google/utils/common.ts
+index 0bab809eb0fd55688baabcd19e0f988af3b98055..6d371bd4ec9c1b16e9318ab479bf3660aceb16d7 100644
+--- a/src/llm/google/utils/common.ts
++++ b/src/llm/google/utils/common.ts
+@@ -144,23 +144,23 @@ export function convertAuthorToRole(
+   author: string
+ ): (typeof POSSIBLE_ROLES)[number] {
+   switch (author) {
+-  /**
++    /**
+      *  Note: Gemini currently is not supporting system messages
+      *  we will convert them to human messages and merge with following
+      * */
+-  case 'supervisor':
+-  case 'ai':
+-  case 'model': // getMessageAuthor returns message.name. code ex.: return message.name ?? type;
+-    return 'model';
+-  case 'system':
+-    return 'system';
+-  case 'human':
+-    return 'user';
+-  case 'tool':
+-  case 'function':
+-    return 'function';
+-  default:
+-    throw new Error(`Unknown / unsupported author: ${author}`);
++    case 'supervisor':
++    case 'ai':
++    case 'model': // getMessageAuthor returns message.name. code ex.: return message.name ?? type;
++      return 'model';
++    case 'system':
++      return 'system';
++    case 'human':
++      return 'user';
++    case 'tool':
++    case 'function':
++      return 'function';
++    default:
++      throw new Error(`Unknown / unsupported author: ${author}`);
+   }
+ }
+ 
+@@ -503,8 +503,8 @@ export function convertMessageContentToParts(
+ 
+     const result = Array.isArray(message.content)
+       ? (message.content
+-        .map((c) => _convertLangChainContentToPart(c, isMultimodalModel))
+-        .filter((p) => p !== undefined) as Part[])
++          .map((c) => _convertLangChainContentToPart(c, isMultimodalModel))
++          .filter((p) => p !== undefined) as Part[])
+       : message.content;
+ 
+     if (message.status === 'error') {
+@@ -913,10 +913,10 @@ export function convertResponseContentToChatGenerationChunk(
+   const response_metadata: Record<string, unknown> | undefined =
+     toolCallChunks.length > 0
+       ? {
+-        [STREAMED_TOOL_CALL_ADAPTER_METADATA_KEY]:
++          [STREAMED_TOOL_CALL_ADAPTER_METADATA_KEY]:
+             GOOGLE_STREAMED_TOOL_CALL_ADAPTER,
+-        [STREAMED_TOOL_CALL_SEAL_METADATA_KEY]: { kind: 'all' },
+-      }
++          [STREAMED_TOOL_CALL_SEAL_METADATA_KEY]: { kind: 'all' },
++        }
+       : undefined;
+ 
+   const chunk = new ChatGenerationChunk({
+diff --git a/src/llm/google/utils/zod_to_genai_parameters.ts b/src/llm/google/utils/zod_to_genai_parameters.ts
+index 763c2127dbbd8e85dad8db0754bc3fc6580abe86..d70995e7fb02342ceec80b39cc5429c0c9812a35 100644
+--- a/src/llm/google/utils/zod_to_genai_parameters.ts
++++ b/src/llm/google/utils/zod_to_genai_parameters.ts
+@@ -25,6 +25,7 @@ export function removeAdditionalProperties(
+   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   obj: Record<string, any>
+ ): GenerativeAIJsonSchema {
++  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Recursive schema values can be null at runtime.
+   if (typeof obj === 'object' && obj !== null) {
+     const newObj = { ...obj };
+ 
+diff --git a/src/llm/invoke.accounting.test.ts b/src/llm/invoke.accounting.test.ts
+index 02c39ad9130cf8b38c9a2e9f4ea2ce0df0d42884..49f1b9dd1f3ded4396d5d4ca859c4ff6005d8ca6 100644
+--- a/src/llm/invoke.accounting.test.ts
++++ b/src/llm/invoke.accounting.test.ts
+@@ -23,11 +23,11 @@ function modelReturning(
+     invoke: async () => response,
+     ...(mode === 'stream'
+       ? {
+-        stream: async function* () {
+-          yield response;
+-          yield new AIMessageChunk({ content: '' });
+-        },
+-      }
++          stream: async function* () {
++            yield response;
++            yield new AIMessageChunk({ content: '' });
++          },
++        }
+       : {}),
+   } as ChatModel;
+ }
+diff --git a/src/llm/invoke.test.ts b/src/llm/invoke.test.ts
+index 0575762d68dba8fd0f5d321ab6d2aa4ec0e96bc9..19f0b2ccc95587a7551912857b45f3860b138a04 100644
+--- a/src/llm/invoke.test.ts
++++ b/src/llm/invoke.test.ts
+@@ -871,24 +871,44 @@ describe('tryFallbackProviders applies the same lazy annotation transform', () =
+   });
+ 
+   it.each(['input', 'window', undefined] as const)(
+-    'forwards budget mode %s through deprecated fallback preparation', async contextBudgetMode => {
+-      const {invokeMessages, model} = buildCapturingModel();
++    'forwards budget mode %s through deprecated fallback preparation',
++    async (contextBudgetMode) => {
++      const { invokeMessages, model } = buildCapturingModel();
+       const messages = [new HumanMessage('Fallback input')];
+-      const clientOptions = {model: 'fallback', maxTokens: 1024};
+-      const prepare = jest.fn<NonNullable<Parameters<typeof tryFallbackProviders>[0]['prepareProviderMessages']>>(
+-        async input => input.messages
+-      );
++      const clientOptions = { model: 'fallback', maxTokens: 1024 };
++      const prepare = jest.fn<
++        NonNullable<
++          Parameters<typeof tryFallbackProviders>[0]['prepareProviderMessages']
++        >
++      >(async (input) => input.messages);
+       await jest.isolateModulesAsync(async () => {
+-        jest.doMock('@/llm/init', () => ({initializeModel: () => model}));
+-        const {tryFallbackProviders: freshTry} = await import('@/llm/invoke');
+-        await freshTry({fallbacks: [{provider: Providers.OPENAI, clientOptions, maxContextTokens: 10_000, contextBudgetMode}],
+-          messages, primaryError: new Error('Primary unavailable'), prepareProviderMessages: prepare,
++        jest.doMock('@/llm/init', () => ({ initializeModel: () => model }));
++        const { tryFallbackProviders: freshTry } = await import('@/llm/invoke');
++        await freshTry({
++          fallbacks: [
++            {
++              provider: Providers.OPENAI,
++              clientOptions,
++              maxContextTokens: 10_000,
++              contextBudgetMode,
++            },
++          ],
++          messages,
++          primaryError: new Error('Primary unavailable'),
++          prepareProviderMessages: prepare,
+         });
+       });
+       expect(prepare).toHaveBeenCalledTimes(1);
+-      expect(prepare).toHaveBeenCalledWith(expect.objectContaining({model, messages, provider: Providers.OPENAI,
+-        clientOptions, maxContextTokens: 10_000, contextBudgetMode,
+-      }));
++      expect(prepare).toHaveBeenCalledWith(
++        expect.objectContaining({
++          model,
++          messages,
++          provider: Providers.OPENAI,
++          clientOptions,
++          maxContextTokens: 10_000,
++          contextBudgetMode,
++        })
++      );
+       expect(invokeMessages).toHaveLength(1);
+       jest.dontMock('@/llm/init');
+     }
+diff --git a/src/llm/invoke.ts b/src/llm/invoke.ts
+index 734ad23c7e01e5f1418d02d4548713923d4f300e..3bc40008b4dd4b62aee599127c5ae2eb9ab502c1 100644
+--- a/src/llm/invoke.ts
++++ b/src/llm/invoke.ts
+@@ -680,9 +680,13 @@ export async function attemptInvoke(
+     policy == null
+       ? preparedRequest
+       : {
+-        ...preparedRequest,
+-        model: withProviderTextBoundary(preparedRequest.model, policy, provider),
+-      };
++          ...preparedRequest,
++          model: withProviderTextBoundary(
++            preparedRequest.model,
++            policy,
++            provider
++          ),
++        };
+   const configuredModel =
+     providerStampedConfig.metadata?.[Constants.INVOKED_MODEL];
+   const modelId =
+@@ -695,9 +699,9 @@ export async function attemptInvoke(
+       ...(modelId == null
+         ? {}
+         : {
+-          [Constants.INVOKED_MODEL]: modelId,
+-          model: modelId,
+-        }),
++            [Constants.INVOKED_MODEL]: modelId,
++            model: modelId,
++          }),
+       /**
+        * One `attemptInvoke` call is one model attempt; primary, fallback,
+        * and retry attempts within a node otherwise share the same langgraph
+@@ -749,11 +753,18 @@ export async function attemptInvoke(
+   } catch (error) {
+     if (policy != null && config?.signal?.aborted === true) {
+       const reason: unknown = config.signal.reason;
+-      if (reason instanceof StreamLimitExceededError || reason instanceof PreparedSubagentError) {
++      if (
++        reason instanceof StreamLimitExceededError ||
++        reason instanceof PreparedSubagentError
++      ) {
+         prepared?.finish(preparedAttempt, undefined, reason);
+         throw reason;
+       }
+-      const cancelled = new ProviderTextProtectionError(reason instanceof ProviderTextProtectionError ? reason.code : 'cancelled');
++      const cancelled = new ProviderTextProtectionError(
++        reason instanceof ProviderTextProtectionError
++          ? reason.code
++          : 'cancelled'
++      );
+       prepared?.finish(preparedAttempt, undefined, cancelled);
+       throw cancelled;
+     }
+@@ -808,8 +819,8 @@ async function attemptInvokeBody(
+       provider,
+       captureRunId: captureModelRunId
+         ? (runId: string): void => {
+-          sealedRunId ??= runId;
+-        }
++            sealedRunId ??= runId;
++          }
+         : undefined,
+     });
+   }
+@@ -863,12 +874,12 @@ async function attemptInvokeBody(
+       restartController == null
+         ? invocationConfig
+         : {
+-          ...invocationConfig,
+-          signal: composeAbortSignals(
+-            invocationConfig.signal,
+-            restartController.signal
+-          ),
+-        };
++            ...invocationConfig,
++            signal: composeAbortSignals(
++              invocationConfig.signal,
++              restartController.signal
++            ),
++          };
+     const restartGraceMs = resolveRestartGraceMs(
+       context?.preemption?.restartGraceMs
+     );
+@@ -1056,7 +1067,11 @@ async function attemptInvokeBody(
+         notePreemptRestartedRun(sealedRunId, finalChunk);
+       }
+       restartRoute = 'aborted';
+-      restartController.abort(providerTextProtection == null ? undefined : createProviderTextRestartCancellation());
++      restartController.abort(
++        providerTextProtection == null
++          ? undefined
++          : createProviderTextRestartCancellation()
++      );
+       return true;
+     };
+     const unsubscribeWake =
+@@ -1323,7 +1338,8 @@ async function attemptInvokeBody(
+         restartRoute === 'aborted' &&
+         !(error instanceof StreamLimitExceededError) &&
+         !(error instanceof PreparedSubagentError) &&
+-        (!(error instanceof ProviderTextProtectionError) || isProviderTextRestartCancellation(error)) &&
++        (!(error instanceof ProviderTextProtectionError) ||
++          isProviderTextRestartCancellation(error)) &&
+         config.signal?.aborted !== true;
+       if (!ownAbort) {
+         throw error;
+@@ -1617,7 +1633,11 @@ export async function tryFallbackProviders({
+     config?: RunnableConfig;
+   }) => BaseMessage[] | Promise<BaseMessage[]>;
+ }): Promise<Partial<t.BaseGraphState> | undefined> {
+-  if (primaryError instanceof ProviderTextProtectionError || isProviderCancellation(primaryError)) throw primaryError;
++  if (
++    primaryError instanceof ProviderTextProtectionError ||
++    isProviderCancellation(primaryError)
++  )
++    throw primaryError;
+   config?.signal?.throwIfAborted();
+   const isOverflow = (
+     error: unknown,
+@@ -1641,7 +1661,7 @@ export async function tryFallbackProviders({
+         provider: fb.provider,
+         clientOptions: fb.clientOptions,
+         tools,
+-        ...(disableToolCalling == null ? {} : {disableToolCalling}),
++        ...(disableToolCalling == null ? {} : { disableToolCalling }),
+       });
+       /**
+        * Stamp the fallback's configured model onto callback metadata so
+@@ -1655,12 +1675,12 @@ export async function tryFallbackProviders({
+         fbModelName == null
+           ? config
+           : {
+-            ...config,
+-            metadata: {
+-              ...(config?.metadata ?? {}),
+-              [Constants.INVOKED_MODEL]: fbModelName,
+-            },
+-          };
++              ...config,
++              metadata: {
++                ...(config?.metadata ?? {}),
++                [Constants.INVOKED_MODEL]: fbModelName,
++              },
++            };
+       const preparationInput = {
+         model: fbModel as t.ChatModel,
+         messages,
+@@ -1757,8 +1777,8 @@ export async function tryFallbackProviders({
+         maxContextTokens: fb.maxContextTokens,
+         ...(overflowContext?.provider === fb.provider
+           ? {
+-            estimatedPromptTokens: overflowContext.estimatedPromptTokens,
+-          }
++              estimatedPromptTokens: overflowContext.estimatedPromptTokens,
++            }
+           : {}),
+       };
+       if (isOverflow(e, fallbackOverflowContext)) {
+diff --git a/src/llm/openai/index.ts b/src/llm/openai/index.ts
+index 8bfad44db1b3b7d643a26bb1a4d125663576a2f2..5270bcec0c7e0e51854e6014644456ac606cf27d 100644
+--- a/src/llm/openai/index.ts
++++ b/src/llm/openai/index.ts
+@@ -1655,7 +1655,7 @@ async function* delayStreamChunks(
+ ): AsyncGenerator<ChatGenerationChunk> {
+   const source = (async function* (): AsyncGenerator<
+     SmoothItem<ChatGenerationChunk>
+-    > {
++  > {
+     for await (const chunk of chunks) {
+       yield toSmoothItem(chunk);
+     }
+@@ -2452,10 +2452,10 @@ class LibreChatOpenAIResponses extends OriginalChatOpenAIResponses {
+     const cacheControl =
+       promptCache === true
+         ? buildAnthropicCacheControl(
+-          resolvePromptCacheTtl(
+-            cacheOptions?.promptCacheTtl ?? this.responsesPromptCacheTtl
++            resolvePromptCacheTtl(
++              cacheOptions?.promptCacheTtl ?? this.responsesPromptCacheTtl
++            )
+           )
+-        )
+         : undefined;
+     const baseParams = applyManagedRequestParams(
+       super.invocationParams(options),
+diff --git a/src/llm/stream/chunkAdapters.ts b/src/llm/stream/chunkAdapters.ts
+index ea3491db5ef82b0f8da56a95de57da7aab387707..7b33bc788eb845605155121f78a2b8c90df5aca6 100644
+--- a/src/llm/stream/chunkAdapters.ts
++++ b/src/llm/stream/chunkAdapters.ts
+@@ -295,7 +295,7 @@ export async function* smoothGenerationChunks({
+ }): AsyncGenerator<ChatGenerationChunk> {
+   const source = (async function* (): AsyncGenerator<
+     SmoothItem<ChatGenerationChunk>
+-    > {
++  > {
+     for await (const chunk of chunks) {
+       yield toGenerationSmoothItem(chunk, getReasoningKwargsText);
+     }
+diff --git a/src/messages/cache.tail.test.ts b/src/messages/cache.tail.test.ts
+index f2e9684331c333cb0181b69f6520216b1fa5f3eb..4b8454007872ec67335fae1e07f0f1f8ff3cddb2 100644
+--- a/src/messages/cache.tail.test.ts
++++ b/src/messages/cache.tail.test.ts
+@@ -36,7 +36,11 @@ function countCacheMarkers(
+       continue;
+     }
+     for (const block of message.content) {
+-      if (block && typeof block === 'object' && 'cache_control' in block) {
++      if (
++        block != null &&
++        typeof block === 'object' &&
++        'cache_control' in block
++      ) {
+         count++;
+       }
+     }
+@@ -379,7 +383,7 @@ function countCachePoints(
+       continue;
+     }
+     for (const block of message.content) {
+-      if (block && typeof block === 'object' && 'cachePoint' in block) {
++      if (block != null && typeof block === 'object' && 'cachePoint' in block) {
+         count++;
+       }
+     }
+diff --git a/src/messages/cache.ts b/src/messages/cache.ts
+index c77a4d579eca42293d338364d0e0e821a8019ab3..d914317df3dbcd44773d320c658c5ef9c7c7711f 100644
+--- a/src/messages/cache.ts
++++ b/src/messages/cache.ts
+@@ -3,8 +3,8 @@ import { BaseMessage, MessageContentComplex } from '@langchain/core/messages';
+ import type Anthropic from '@anthropic-ai/sdk';
+ import type { AnthropicMessage } from '@/types/messages';
+ import { hasComputerCallOutputMarker } from '@/utils/toolContent';
+-import { toLangChainContent } from './langchain';
+ import { isReasoningContentBlock } from './reasoningTypes';
++import { toLangChainContent } from './langchain';
+ import { ContentTypes } from '@/common/enum';
+ 
+ type MessageWithContent = {
+@@ -136,7 +136,7 @@ function deepCloneContent<T extends string | MessageContentComplex[]>(
+     return content;
+   }
+   if (Array.isArray(content)) {
+-    return content.map((block) => {
++    return content.map((block: unknown) => {
+       if (typeof block !== 'object' || block == null || isProxy(block)) {
+         return block;
+       }
+@@ -412,9 +412,7 @@ function isCachePoint(block: unknown): boolean {
+  * Anchoring the only breakpoint on a block that is about to disappear silently
+  * loses tail caching, so all of these are excluded.
+  */
+-const NON_ANCHORABLE_BLOCK_TYPES = new Set([
+-  'input_json_delta',
+-]);
++const NON_ANCHORABLE_BLOCK_TYPES = new Set(['input_json_delta']);
+ 
+ /**
+  * A block can anchor the tail cache breakpoint when it is a real content block
+@@ -725,7 +723,7 @@ export function addCacheControlToStablePrefixMessages<
+  */
+ function hasAnthropicCacheControl(content: MessageContentComplex[]): boolean {
+   for (let i = 0; i < content.length; i++) {
+-    const block = content[i];
++    const block: unknown = content[i];
+     if (typeof block !== 'object' || block == null || isProxy(block)) {
+       continue;
+     }
+@@ -1039,7 +1037,6 @@ export function addBedrockTailCacheControl<
+           cachePoint: buildBedrockCachePoint(ttl),
+         } as MessageContentComplex);
+         cachePointPlaced = true;
+-        modified = true;
+       }
+     } else if (typeof content === 'string' && canPlaceCachePoint) {
+       workingContent = [
+diff --git a/src/specs/eager-bedrock.live.test.ts b/src/specs/eager-bedrock.live.test.ts
+index 740aa2c380da1b83ab8a99058b7efcdc781c4e88..e5ec972531cfd04421023396be82dc9306939137 100644
+--- a/src/specs/eager-bedrock.live.test.ts
++++ b/src/specs/eager-bedrock.live.test.ts
+@@ -56,7 +56,7 @@ function buildPrompt(): string {
+     'SELECT',
+     `  ${projections}`,
+     'FROM analytics.events',
+-    'WHERE event_date >= today() - 30 AND tenant_id = \'tenant_live_test\'',
++    "WHERE event_date >= today() - 30 AND tenant_id = 'tenant_live_test'",
+     '```',
+   ].join('\n');
+ }
+diff --git a/src/specs/token-accounting-e2e.test.ts b/src/specs/token-accounting-e2e.test.ts
+index 6b305729e38e1aea406393bb691fd7dead253f74..46d74684260223d564b9a4e619012e2cfaa6dd22 100644
+--- a/src/specs/token-accounting-e2e.test.ts
++++ b/src/specs/token-accounting-e2e.test.ts
+@@ -111,7 +111,9 @@ const INSTRUCTIONS = 'You are a helpful math tutor. Be concise.';
+ 
+ function addAccountingPressure(history: BaseMessage[]): void {
+   const detail =
+-    'Keep the verified result, token usage, calibration ratio, and summary overhead for the next run. '.repeat(2);
++    'Keep the verified result, token usage, calibration ratio, and summary overhead for the next run. '.repeat(
++      2
++    );
+   const pressure: BaseMessage[] = [];
+   for (let turn = 0; turn < 8; turn++) {
+     pressure.push(
+@@ -193,8 +195,10 @@ describe('Token accounting E2E — Run + Graph + real token counter', () => {
+         summarizationEnabled: true,
+         summarizationConfig: {
+           provider: Providers.OPENAI,
+-          prompt: 'Checkpoint the verified results and accounting context concisely.',
+-          updatePrompt: 'Merge the new accounting context into the prior checkpoint.',
++          prompt:
++            'Checkpoint the verified results and accounting context concisely.',
++          updatePrompt:
++            'Merge the new accounting context into the prior checkpoint.',
+           maxSummaryTokens: 64,
+         },
+         initialSummary: opts.initialSummary,
+@@ -319,7 +323,6 @@ describe('Token accounting E2E — Run + Graph + real token counter', () => {
+     // Token count should match what our real counter computes
+     const summaryTokenCount = completePayload.summary!.tokenCount ?? 0;
+     expect(summaryTokenCount).toBeGreaterThan(5);
+-
+   });
+ 
+   // =========================================================================
+diff --git a/src/utils/proxy.ts b/src/utils/proxy.ts
+index bfbd7025bd3f66d733373cd1c4af3257332c136f..1521bcd5a412c5fb2beccb72789ee600564cf905 100644
+--- a/src/utils/proxy.ts
++++ b/src/utils/proxy.ts
+@@ -43,8 +43,8 @@ export function shouldBypassProxy(
+       if (!match) {
+         return false;
+       }
+-      const entryHost = (match[1] ?? '').replace(/^\./, '').toLowerCase();
+-      const entryPort = match[2];
++      const entryHost = match[1].replace(/^\./, '').toLowerCase();
++      const entryPort = match.at(2);
+       if (entryHost === '') {
+         return false;
+       }

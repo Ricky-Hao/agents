@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "upstream": {
+    "ref": "v4.2.11",
+    "commit": "690865f925800990bc8941e15fe93741b3cbd626"
+  },
+  "patches": [
+    {
+      "id": "package-metadata",
+      "status": "local",
+      "summary": "包名、fork 版本、axios 与锁文件、npm 文件清单",
+      "depends_on": [],
+      "commands": [["npm", "ls", "--depth=0", "axios"]]
+    },
+    {
+      "id": "message-provenance",
+      "status": "feature",
+      "summary": "Skill 载体、消息来源、助手文本阶段与上下文修复",
+      "depends_on": [],
+      "jest": [
+        "src/llm/openai/utils/messages.test.ts",
+        "src/messages/__tests__/recency.test.ts",
+        "src/messages/formatAgentMessages.skills.test.ts",
+        "src/tools/__tests__/SkillTool.test.ts"
+      ]
+    },
+    {
+      "id": "summary-stream",
+      "status": "feature",
+      "summary": "摘要压缩、元数据摘要占位、推理和失败流事件",
+      "depends_on": [
+        "message-provenance"
+      ],
+      "jest": [
+        "src/graphs/__tests__/Graph.compactionWindow.test.ts",
+        "src/graphs/__tests__/Graph.reasoning.test.ts",
+        "src/graphs/__tests__/Graph.summarizeOnly.test.ts",
+        "src/messages/contextRepair.test.ts",
+        "src/messages/formatAgentMessages.test.ts",
+        "src/messages/reasoningTypes.test.ts",
+        "src/session/__tests__/JsonlSessionStore.test.ts",
+        "src/stream.test.ts",
+        "src/summarization/__tests__/input.test.ts",
+        "src/summarization/__tests__/node.test.ts",
+        "src/summarization/__tests__/ordering.test.ts",
+        "src/summarization/__tests__/protectedHistory.test.ts",
+        "src/summarization/__tests__/reasoningBudget.test.ts",
+        "src/summarization/__tests__/reasoningStream.test.ts",
+        "src/summarization/__tests__/retry.test.ts",
+        "src/summarization/__tests__/retryTransport.test.ts",
+        "src/summarization/__tests__/shared.test.ts",
+        "src/summarization/__tests__/usage.test.ts",
+        "src/summarization/__tests__/window.test.ts"
+      ]
+    },
+    {
+      "id": "programmatic-tools",
+      "status": "feature",
+      "summary": "程序化工具身份、intent、调用续接、结果归一化与本地工具选择",
+      "depends_on": [],
+      "jest": [
+        "src/tools/__tests__/ProgrammaticCallIdentity.test.ts",
+        "src/tools/__tests__/intentInspection.test.ts",
+        "src/tools/__tests__/intentInvoke.test.ts",
+        "src/tools/__tests__/localToolSelection.test.ts",
+        "src/tools/__tests__/programmaticContinuation.test.ts",
+        "src/tools/__tests__/programmaticLocalResults.test.ts",
+        "src/tools/__tests__/programmaticResults.test.ts",
+        "src/tools/__tests__/ProgrammaticToolCalling.test.ts"
+      ]
+    },
+    {
+      "id": "artifact-guidance",
+      "status": "feature",
+      "summary": "Python 与 Bash 产物引用规则、跨技能文件使用及执行器提示",
+      "depends_on": [
+        "programmatic-tools"
+      ],
+      "jest": [
+        "src/agents/__tests__/AgentContext.test.ts",
+        "src/tools/__tests__/BashExecutor.test.ts",
+        "src/tools/__tests__/CodeApiAuthHeaders.test.ts",
+        "src/tools/__tests__/CodeExecutor.stateful.test.ts",
+        "src/tools/__tests__/ProgrammaticToolCalling.test.ts"
+      ]
+    },
+    {
+      "id": "checkpoint-replay",
+      "status": "keep",
+      "summary": "检查点、审批、子代理和工具批次重放",
+      "depends_on": [],
+      "jest": [
+        "src/graphs/__tests__/Graph.subagentResumeState.test.ts",
+        "src/hitl/approvalReview.test.ts",
+        "src/specs/graph-subagent-hitl.test.ts",
+        "src/specs/graph-subagent.test.ts",
+        "src/specs/pending-approval-proposal.test.ts",
+        "src/specs/root-parallel-hitl.test.ts",
+        "src/specs/root-replay-isolation.test.ts",
+        "src/specs/root-subagent-hitl.test.ts",
+        "src/specs/run-checkpoint-interrupts.test.ts",
+        "src/tools/__tests__/SubagentExecutor.test.ts",
+        "src/tools/__tests__/SubagentReplay.test.ts",
+        "src/tools/__tests__/ToolNode.approvalScope.test.ts",
+        "src/tools/__tests__/hitl.test.ts",
+        "src/tools/subagent/__tests__/SubagentExecutor.lazy.test.ts",
+        "src/tools/toolBatchReplay.test.ts"
+      ]
+    },
+    {
+      "id": "provider-compatibility",
+      "status": "keep",
+      "summary": "模型供应商流适配、提示缓存、token 用量和代理兼容性",
+      "depends_on": [],
+      "jest": [
+        "src/agents/__tests__/AgentContext.overflow.test.ts",
+        "src/llm/bedrock/openaiStream.test.ts",
+        "src/llm/bedrock/utils/harmony.test.ts",
+        "src/llm/invoke.accounting.test.ts",
+        "src/llm/invoke.test.ts",
+        "src/messages/cache.tail.test.ts"
+      ]
+    },
+    {
+      "id": "local-tool-result-caps",
+      "status": "keep",
+      "summary": "本地工具输出上限、跳过截断的提示和 workspace 执行相关检查",
+      "depends_on": [],
+      "jest": [
+        "src/tools/__tests__/CloudflareSandboxExecution.test.ts",
+        "src/tools/__tests__/localToolResultCaps.test.ts"
+      ]
+    },
+    {
+      "id": "sdk-validation",
+      "status": "local",
+      "summary": "SDK 开发规则、lint、Langfuse 测试及 decisions HTTP 超时测试",
+      "depends_on": [],
+      "commands": [
+        ["npm", "run", "typecheck"],
+        ["npm", "run", "test:typecheck"],
+        ["npm", "run", "test:circular-deps"],
+        ["npm", "run", "check:circular-deps"]
+      ],
+      "jest": [
+        "src/decisions/decisions.test.ts",
+        "src/specs/langfuse-callbacks.test.ts",
+        "src/specs/langfuse-routing.integration.test.ts"
+      ]
+    },
+    {
+      "id": "sdk-consumer-docs",
+      "status": "local",
+      "summary": "SDK README 与消费者迁移说明",
+      "depends_on": [
+        "package-metadata",
+        "summary-stream",
+        "artifact-guidance"
+      ]
+    },
+    {
+      "id": "upstream-publish-guard",
+      "status": "local",
+      "summary": "保留历史 fork 对上游发行任务的仓库限定",
+      "depends_on": [],
+      "commands": [["node", "--test", "config/workflow-syntax.test.mjs"]]
+    }
+  ]
+}
