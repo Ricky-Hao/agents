@@ -2,7 +2,7 @@
 
 本分支维护 `@librechat/agents` 的有序补丁。`manifest.json` 固定上游完整 SHA，并记录各组依赖和定向检查。维护分支用于审阅补丁，`release/v<version>` 用于保存生成的 SDK 源码。
 
-当前基线是 LibreChat-AI/agents `v4.2.11`（`690865f925800990bc8941e15fe93741b3cbd626`）。本分支生成 `4.2.11-ricky.2` 本地候选。生产前序 `4.2.11-ricky.1` 的完整重放 tree 为 `996688a08ea9bca1030271f79e23a14df8ad537d`。[来源与分组](docs/sources.md)
+当前基线是 LibreChat-AI/agents `v4.2.11`（`690865f925800990bc8941e15fe93741b3cbd626`）。本分支生成 `4.2.11-ricky.3` 本地候选。前序 `4.2.11-ricky.2` 首次提供工具原图按需读回，本次修复它与前台提问的 saver 共存时停用的问题。[来源与分组](docs/sources.md)
 
 在维护 checkout 根目录运行。重放需要 Git 和 Python 3.9+。SDK 验证和打包使用目标 `package.json` 要求的 Node 与 npm，当前需要 Node 24+。
 
@@ -23,8 +23,8 @@ python3 tools/patchset.py test --target "$sdk"
 每次发版在已提交的维护 checkout 中，用完整版本创建新分支。`origin` 指向 Ricky-Hao/agents，输出目录须是新路径。
 
 ```sh
-python3 tools/release.py --patch-ref HEAD --version 4.2.11-ricky.2 \
-  --output ../agents-release-4.2.11-ricky.2
+python3 tools/release.py --patch-ref HEAD --version 4.2.11-ricky.3 \
+  --output ../agents-release-4.2.11-ricky.3
 ```
 
 命令保留完整重放提交，在发版分支的 tip 移除 GitHub Actions workflows，并构建和验证 SDK tarball。保留输出目录中的 tarball、源码 diff 和 `release.json`。版本更新、冲突处理、替代、淘汰及 LibreChat 接入见[维护手册](docs/maintenance.md)。
