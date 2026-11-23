@@ -1,0 +1,1134 @@
+diff --git a/src/graphs/Graph.ts b/src/graphs/Graph.ts
+index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0f3b0a98c 100644
+--- a/src/graphs/Graph.ts
++++ b/src/graphs/Graph.ts
+@@ -37,6 +37,8 @@ import type {
+   GraphFactoryRequest,
+ } from '@/graphs/graphFactory';
+ import type { OverflowRecoveryPlan } from '@/llm/contextOverflowRecovery';
++import type { ToolImageRead } from '@/tools/imageRead';
++import type { ArtifactProjection } from '@/messages/core';
+ import type { FallbackErrorContext } from '@/llm/invoke';
+ import type { HandoffRouting } from './handoff';
+ import type { HookRegistry } from '@/hooks';
+@@ -1370,6 +1372,7 @@ export abstract class Graph<
+ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+   readonly runName: string = STANDARD_GRAPH_RUN_NAME;
+   overrideModel?: t.ChatModel;
++  imageRead?: ToolImageRead;
+   private subagentModelOverride?: t.ChatModel;
+   private readonly graphFactory: GraphFactory;
+   private readonly supportsMultiAgentChildren: boolean;
+@@ -3040,6 +3043,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+         errorHandler: (data, metadata): Promise<boolean> =>
+           StandardGraph.handleToolCallErrorStatic(this, data, metadata),
+       });
++      node.imageRead = this.imageRead;
+       this.registerCompiledToolNode(node);
+       if (agentContext != null) {
+         this.subagentToolNodes.set(agentContext.agentId, node);
+@@ -3942,11 +3946,22 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+         return best;
+       };
+ 
++      const imageRead = this.overrideModel == null ? this.imageRead : undefined;
++      const artifactProjection: ArtifactProjection | undefined =
++        imageRead == null
++          ? undefined
++          : { remainingChars: maxProviderToolResultChars, imagePositions: new Map() };
++      const discardArtifactBudget = (): void => {
++        if (artifactProjection == null) return;
++        artifactProjection.imagePositions.clear();
++        artifactProjection.remainingChars = maxProviderToolResultChars;
++      };
+       const projectServingArtifacts = (
+         candidate: BaseMessage[],
+         provider: t.ProviderName,
+         clientOptions: t.ClientOptions | undefined,
+-        maxChars: number
++        maxChars: number,
++        projection?: ArtifactProjection
+       ): BaseMessage[] => {
+         if (!(candidate[candidate.length - 1] instanceof ToolMessage)) {
+           return candidate;
+@@ -3963,7 +3978,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+         ) {
+           return trackProviderMessageOrigins(
+             candidate,
+-            projectArtifactPayload(candidate, maxChars)
++            projectArtifactPayload(candidate, maxChars, projection)
+           );
+         }
+         return candidate;
+@@ -4017,7 +4032,8 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+           finalMessages,
+           agentContext.provider,
+           agentContext.clientOptions,
+-          maxProviderToolResultChars
++          maxProviderToolResultChars,
++          artifactProjection
+         );
+ 
+         if (artifactCandidate !== finalMessages) {
+@@ -4026,6 +4042,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+             artifactBaseMessages = finalMessages;
+             finalMessages = artifactCandidate;
+           } else {
++            discardArtifactBudget();
+             emitAgentLog(
+               config,
+               'warn',
+@@ -4047,6 +4064,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+       let finalProjection = measureProviderPayload(finalMessages);
+       if (artifactBaseMessages != null) {
+         if (!finalProjection.fits) {
++          discardArtifactBudget();
+           finalMessages = projectProviderReferences(
+             applyProviderMessageTransforms(artifactBaseMessages)
+           );
+@@ -4220,6 +4238,13 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+       );
+ 
+       const beforeFinalProviderProjection = finalMessages;
++      let exposedImages: ReturnType<ToolImageRead['project']>['exposed'] = [];
++      const measurePreparedMessages = (
++        prepared: BaseMessage[]
++      ): ReturnType<typeof measureProviderPayload> =>
++        measureProviderPayload(
++          trackProviderMessageOrigins(beforeFinalProviderProjection, prepared)
++        );
+       const preparedRequest = prepareProviderRequest({
+         model: (this.overrideModel ?? model) as t.ChatModel,
+         messages: beforeFinalProviderProjection,
+@@ -4228,13 +4253,20 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+         config,
+         maxToolResultChars: maxProviderToolResultChars,
+         toolHistory,
+-        measure: (preparedMessages) =>
+-          measureProviderPayload(
+-            trackProviderMessageOrigins(
+-              beforeFinalProviderProjection,
+-              preparedMessages
+-            )
+-          ),
++        projectResponsesImages:
++          imageRead != null && artifactProjection != null
++            ? (prepared): BaseMessage[] => {
++                const projection = imageRead.project(
++                  messages,
++                  prepared,
++                  artifactProjection,
++                  (candidate) => measurePreparedMessages(candidate).fits
++                );
++                exposedImages = projection.exposed;
++                return projection.messages;
++              }
++            : undefined,
++        measure: measurePreparedMessages,
+       });
+       finalMessages = preparedRequest.messages;
+ 
+@@ -4476,6 +4508,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+               invokeConfig
+             )
+         );
++        imageRead?.confirm(exposedImages);
+       } catch (primaryError) {
+         clearCurrentDeltaStepMarkers({
+           graph: this,
+diff --git a/src/llm/prepareProviderRequest.ts b/src/llm/prepareProviderRequest.ts
+index 9dc2597382c51de8de08f99e3cdb7043d4740bc1..5cb66f91237ac2c0da57556eb4cf75b2ef9ba484 100644
+--- a/src/llm/prepareProviderRequest.ts
++++ b/src/llm/prepareProviderRequest.ts
+@@ -122,6 +122,7 @@ export interface PrepareProviderRequestParams {
+   config?: RunnableConfig;
+   maxToolResultChars?: number;
+   measure?: (messages: BaseMessage[]) => ProviderPayloadMeasurement;
++  projectResponsesImages?: (messages: BaseMessage[]) => BaseMessage[];
+   toolHistory?: ToolHistoryPreparation;
+ }
+ 
+@@ -533,6 +534,7 @@ export function prepareProviderRequest({
+   config,
+   maxToolResultChars,
+   measure,
++  projectResponsesImages,
+   toolHistory = createToolHistoryPreparation(),
+ }: PrepareProviderRequestParams): PreparedProviderRequest {
+   const projectionMode = resolveProviderMessageProjectionMode(
+@@ -570,14 +572,18 @@ export function prepareProviderRequest({
+   const preparedMessages = providerRequiresStrictAlternation(provider)
+     ? coalesceAdjacentUserTurns(cued)
+     : cued;
++  const finalMessages =
++    projectionMode === 'openai-responses'
++      ? projectResponsesImages?.(preparedMessages) ?? preparedMessages
++      : preparedMessages;
+ 
+   const request: PreparedProviderRequestData = {
+     model,
+     modelId,
+     provider,
+     projectionMode,
+-    messages: preparedMessages,
+-    measurement: measure?.(preparedMessages),
++    messages: finalMessages,
++    measurement: measure?.(finalMessages),
+   };
+   Object.defineProperty(request, preparedProviderRequestBrand, {
+     value: true,
+diff --git a/src/messages/core.ts b/src/messages/core.ts
+index 41bb88913be1bab573196174244267acd7e16f95..2257c10741aaeae4b154b59b6e9f5b158dc649bc 100644
+--- a/src/messages/core.ts
++++ b/src/messages/core.ts
+@@ -2617,12 +2617,14 @@ export function formatAnthropicArtifactContent(messages: BaseMessage[]): void {
+   }
+ }
+ 
+-export function projectArtifactPayload(
++export function latestArtifactToolBatch(
+   messages: BaseMessage[],
+-  maxChars = HARD_MAX_TOOL_RESULT_CHARS
+-): BaseMessage[] {
++  inCallOrder = true
++):
++  | { parent: AIMessage; toolIndices: number[] }
++  | undefined {
+   const lastMessageY = messages[messages.length - 1];
+-  if (!(lastMessageY instanceof ToolMessage)) return messages;
++  if (!(lastMessageY instanceof ToolMessage)) return;
+ 
+   // Find the latest AIMessage with tool_calls that this tool message belongs to
+   const latestAIParentIndex = findLastIndex(
+@@ -2634,14 +2636,46 @@ export function projectArtifactPayload(
+       false
+   );
+ 
+-  if (latestAIParentIndex === -1) return messages;
++  if (latestAIParentIndex === -1) return;
++  const parent = messages[latestAIParentIndex] as AIMessage;
++  const toolIndices: number[] = [];
++  if (inCallOrder) {
++    const byId = new Map<string, number>();
++    for (let index = latestAIParentIndex + 1; index < messages.length; index++) {
++      const message = messages[index];
++      if (message instanceof ToolMessage) byId.set(message.tool_call_id, index);
++    }
++    for (const call of parent.tool_calls ?? []) {
++      const index = call.id == null ? undefined : byId.get(call.id);
++      if (index != null) toolIndices.push(index);
++    }
++  } else {
++    for (let index = latestAIParentIndex + 1; index < messages.length; index++) {
++      if (messages[index] instanceof ToolMessage) toolIndices.push(index);
++    }
++  }
++  return { parent, toolIndices };
++}
++
++export type ArtifactProjection = {
++  remainingChars: number;
++  imagePositions: Map<object, number>;
++};
++
++export function projectArtifactPayload(
++  messages: BaseMessage[],
++  maxChars = HARD_MAX_TOOL_RESULT_CHARS,
++  projection?: ArtifactProjection
++): BaseMessage[] {
++  const batch = latestArtifactToolBatch(messages, projection != null);
++  if (batch == null) return messages;
+ 
+   // Single pass: collect relevant tool messages with artifacts and aggregate
+   const aggregate = createBoundedContentAccumulator(maxChars);
+   let formattedMessages: BaseMessage[] | undefined;
+   const artifactProvenanceParts: ProviderMessageProvenancePart[] = [];
+ 
+-  for (let i = latestAIParentIndex + 1; i < messages.length; i++) {
++  for (const i of batch.toolIndices) {
+     const msg = messages[i];
+     if (
+       !(msg instanceof ToolMessage) ||
+@@ -2710,6 +2744,15 @@ export function projectArtifactPayload(
+     }
+   }
+ 
++  if (projection != null) {
++    projection.remainingChars = aggregate.remainingChars;
++    let imagePosition = 0;
++    for (const block of aggregate.blocks) {
++      if (block.type === 'image_url') {
++        projection.imagePositions.set(block, ++imagePosition);
++      }
++    }
++  }
+   if (aggregate.hasContent && artifactProvenanceParts.length > 0) {
+     const artifactPayload = new HumanMessage({
+       content: toLangChainContent(aggregate.blocks),
+diff --git a/src/run.ts b/src/run.ts
+index da6c5598db32558ed62b1d035213b1945f493d83..30800e701b05153f903ed253504a9d5b8431347a 100644
+--- a/src/run.ts
++++ b/src/run.ts
+@@ -40,6 +40,7 @@ import {
+ import {
+   Callback,
+   GraphEvents,
++  Providers,
+   TitleMethod,
+   ACTIVITY_LABEL_RUN_NAME,
+   REASONING_LABEL_RUN_NAME,
+@@ -55,6 +56,7 @@ import {
+   disposeLangfuseHandler,
+   getLangfuseTraceName,
+   isLangfuseCallbackHandler,
++  shouldCreateLangfuseHandler,
+   withLangfuseAttributes,
+ } from '@/langfuse';
+ import {
+@@ -119,6 +121,7 @@ import { seedRunInitialSessions } from '@/utils/toolSessions';
+ import { getTraceIdSeed } from '@/langfuseRuntimeContext';
+ import { resolveClientOptionsModel } from '@/llm/request';
+ import { HandoffLimitError } from '@/graphs/handoff';
++import { ToolImageRead, READ_IMAGE_TOOL } from '@/tools/imageRead';
+ import { createGraph } from '@/graphs/createGraph';
+ import { isFadingTier } from '@/messages/fading';
+ import { resolveMaxSeals } from '@/llm/preempt';
+@@ -637,7 +640,10 @@ export class Run<_T extends t.BaseGraphState> {
+       }
+     } else {
+       /** Default to legacy graph for 'standard' or undefined type */
+-      this.graphRunnable = this.createLegacyGraph(config.graphConfig);
++      this.graphRunnable = this.createLegacyGraph(
++        config.graphConfig,
++        config.isTrustedToolImage
++      );
+       if (this.Graph) {
+         this.Graph.handlerRegistry = handlerRegistry;
+       }
+@@ -670,7 +676,8 @@ export class Run<_T extends t.BaseGraphState> {
+   }
+ 
+   private createLegacyGraph(
+-    config: t.LegacyGraphConfig | t.StandardGraphConfig
++    config: t.LegacyGraphConfig | t.StandardGraphConfig,
++    isTrustedToolImage?: t.RunConfig['isTrustedToolImage']
+   ): t.CompiledStateWorkflow {
+     let agentConfig: t.AgentInputs;
+     let signal: AbortSignal | undefined;
+@@ -703,6 +710,41 @@ export class Run<_T extends t.BaseGraphState> {
+       signal = legacySignal;
+     }
+ 
++    const clientOptions = agentConfig.clientOptions as
++      | (t.OpenAIClientOptions & t.LLMConfig)
++      | undefined;
++    const imageRead =
++      isTrustedToolImage != null &&
++      agentConfig.provider === Providers.OPENAI &&
++      clientOptions?.useResponsesApi === true &&
++      clientOptions.modelKwargs?.previous_response_id == null &&
++      (clientOptions.fallbacks?.length ?? 0) === 0 &&
++      config.compileOptions?.checkpointer == null &&
++      this.humanInTheLoop?.enabled !== true &&
++      (this.clientDelegatedToolNames?.length ?? 0) === 0 &&
++      !['LANGSMITH_TRACING_V2', 'LANGCHAIN_TRACING_V2', 'LANGSMITH_TRACING', 'LANGCHAIN_TRACING'].some(
++        (key) => process.env[key]?.toLowerCase() === 'true'
++      ) &&
++      !shouldCreateLangfuseHandler(
++        resolveLangfuseConfig(this.langfuse, agentConfig.langfuse)
++      ) &&
++      ![
++        ...(agentConfig.toolDefinitions ?? []),
++        ...(agentConfig.tools ?? []),
++        ...(agentConfig.graphTools ?? []),
++      ].some((tool) => 'name' in tool && tool.name === READ_IMAGE_TOOL)
++        ? new ToolImageRead(isTrustedToolImage)
++        : undefined;
++    if (imageRead != null) {
++      // GenericTool's StructuredToolInterface type only models Zod schemas.
++      // The graph's schema conversion and ToolNode also handle JSON schema tools.
++      const tool = imageRead.tool as unknown as t.GenericTool;
++      agentConfig = {
++        ...agentConfig,
++        graphTools: [...(agentConfig.graphTools ?? []), tool],
++      };
++    }
++
+     const standardGraph = createGraph({
+       kind: 'standard',
+       input: {
+@@ -726,6 +768,7 @@ export class Run<_T extends t.BaseGraphState> {
+         clientDelegatedToolNames: this.clientDelegatedToolNames,
+       },
+     });
++    standardGraph.imageRead = imageRead;
+     /** Propagate compile options from graph config */
+     standardGraph.compileOptions = this.applyHITLCheckpointerFallback(
+       config.compileOptions
+@@ -1322,6 +1365,7 @@ export class Run<_T extends t.BaseGraphState> {
+      * instead of `inputs.messages`.
+      */
+     const isResume = inputs instanceof Command;
++    if (isResume) graph.imageRead?.end();
+     if (!isResume) {
+       graph.startFreshLangfuseExecution();
+     }
+@@ -1810,6 +1854,7 @@ export class Run<_T extends t.BaseGraphState> {
+     };
+ 
+     try {
++      if (!isResume) graph.imageRead?.start();
+       // When opted in, seed the root trace id from this run's id so feedback /
+       // other external signals can be attached to the trace later without a
+       // lookup (see SeededTraceIdGenerator in ./instrumentation).
+@@ -1863,6 +1908,7 @@ export class Run<_T extends t.BaseGraphState> {
+       }
+       throw err;
+     } finally {
++      graph.imageRead?.end();
+       /**
+        * Preserve session-scoped hooks when the run paused on a HITL
+        * interrupt — the very next call will be `Run.resume()`, which
+diff --git a/src/tools/ToolNode.ts b/src/tools/ToolNode.ts
+index 63521d0219d2035339e4309178890180ea17a628..823ead90f369ddf17918d7846fb8dd988f9bcd58 100644
+--- a/src/tools/ToolNode.ts
++++ b/src/tools/ToolNode.ts
+@@ -1,6 +1,7 @@
+ import { nanoid } from 'nanoid';
+ import { createHash } from 'crypto';
+ import { ToolCall } from '@langchain/core/messages/tool';
++import { ToolInputParsingException } from '@langchain/core/tools';
+ import { RunnableLambda } from '@langchain/core/runnables';
+ import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
+ import {
+@@ -141,6 +142,7 @@ import { ProviderTextProtectionError } from '@/protection/providerText';
+ import { formatToolErrorContent } from '@/tools/toolErrorContent';
+ import { PreparedSubagentError } from '@/tools/preparedSubagents';
+ import { attachRunStepResumeState } from '@/tools/runStepResume';
++import type { ToolImageRead } from '@/tools/imageRead';
+ import { isBackgroundDenyMode } from '@/types/hitl';
+ 
+ function stripToolApprovalReviewConfig(
+@@ -998,6 +1000,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+    * ToolNode building its own.
+    */
+   private toolOutputRegistry?: ToolOutputReferenceRegistry;
++  imageRead?: ToolImageRead;
+   /** Run-scoped selection for swapping remote code tools to local executors. */
+   private toolExecution?: t.ToolExecutionConfig;
+   /** Owning graph's run-scoped breaker signal, composed into each batch's config. */
+@@ -1902,7 +1905,8 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+       runInput,
+     } = batchContext;
+     const tool = this.toolMap.get(call.name);
+-    const registry = this.toolOutputRegistry;
++    const isImageRead = this.imageRead != null && tool === this.imageRead.tool;
++    const registry = isImageRead ? undefined : this.toolOutputRegistry;
+     /**
+      * Prefer the caller-provided snapshot when present — `run()`
+      * captures one synchronously per batch so direct-path placeholder
+@@ -1919,7 +1923,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+     const resolveOptions = {
+       substituteIntentKey: this.toolDeclaresBusinessIntent(call.name),
+     };
+-    if (preBatchSnapshot != null) {
++    if (preBatchSnapshot != null && !isImageRead) {
+       resolveFn = <T>(_runId: string | undefined, args: T): ResolveResult<T> =>
+         preBatchSnapshot.resolve(args, resolveOptions);
+     } else if (registry != null) {
+@@ -2136,7 +2140,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+           /** Error ToolMessages are never registered under a reference key. */
+           return toolMsg;
+         }
+-        if (this.toolOutputRegistry != null) {
++        if (registry != null) {
+           if (typeof originalContent === 'string') {
+             const rawContent = originalContent;
+             const registryContent = stripCodeSessionFileSummary(rawContent);
+@@ -2161,7 +2165,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+              */
+             if (
+               refKey != null &&
+-              this.toolOutputRegistry.claimWarnOnce(runId, call.name)
++              registry.claimWarnOnce(runId, call.name)
+             ) {
+               // eslint-disable-next-line no-console
+               console.warn(
+@@ -2196,6 +2200,14 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+       });
+     } catch (_e: unknown) {
+       const e = _e as Error;
++      if (isImageRead && e instanceof ToolInputParsingException) {
++        return new ToolMessage({
++          content: 'invalid_ref',
++          status: 'error',
++          name: call.name,
++          tool_call_id: call.id!,
++        });
++      }
+       if (!this.handleToolErrors) {
+         throw e;
+       }
+@@ -4846,6 +4858,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+               additional_kwargs: successRefMeta as Record<string, unknown>,
+             }),
+           });
++          if (finalToolOutput === result.content && config.signal?.aborted !== true) {
++            this.imageRead?.accept(toolMessage);
++          }
+         }
+ 
+         if (
+diff --git a/src/tools/__tests__/imageRead.test.ts b/src/tools/__tests__/imageRead.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f7d638ea27c3e986cf50e3e2ff2f97ec21599711
+--- /dev/null
++++ b/src/tools/__tests__/imageRead.test.ts
+@@ -0,0 +1,328 @@
++import {
++  AIMessage,
++  HumanMessage,
++  RemoveMessage,
++  ToolMessage,
++} from '@langchain/core/messages';
++import { MemorySaver, messagesStateReducer } from '@langchain/langgraph';
++import type { BaseMessage } from '@langchain/core/messages';
++import type { RunnableConfig } from '@langchain/core/runnables';
++import type { ArtifactProjection } from '@/messages/core';
++import { projectArtifactPayload } from '@/messages/core';
++import { getToolContentCharLength } from '@/utils/toolContent';
++import { ToolImageRead } from '@/tools/imageRead';
++import { Providers } from '@/common';
++import { Run } from '@/run';
++
++function inline(value: string) {
++  return {
++    type: 'image_url' as const,
++    image_url: { url: `data:image/png;base64,${value}` },
++  };
++}
++
++const first = inline('c3ludGhldGljLTE=');
++const second = inline('c3ludGhldGljLTI=');
++const third = inline('c3ludGhldGljLTM=');
++const original = [first, second, third];
++const prompt = new HumanMessage({
++  id: 'turn',
++  content: 'Read the test images.',
++});
++
++function request(id: string, ...callIds: string[]) {
++  return new AIMessage({
++    id,
++    content: '',
++    tool_calls: callIds.map((callId) => ({ id: callId, name: id, args: {} })),
++  });
++}
++
++function result(id: string, ...images: ReturnType<typeof inline>[]) {
++  return new ToolMessage({
++    id,
++    tool_call_id: id,
++    content: 'Source result',
++    artifact: { content: images },
++  });
++}
++
++function project(
++  scope: ToolImageRead,
++  state: BaseMessage[],
++  chars = 10_000,
++  fits: (messages: BaseMessage[]) => boolean = () => true
++) {
++  const budget: ArtifactProjection = {
++    remainingChars: chars,
++    imagePositions: new Map(),
++  };
++  const serving = projectArtifactPayload(state, chars, budget);
++  const projected = scope.project(state, serving, budget, fits);
++  scope.confirm(projected.exposed);
++  return projected.messages;
++}
++
++function output(messages: BaseMessage[], id: string): string {
++  return String(
++    messages.find(
++      (message) => message instanceof ToolMessage && message.tool_call_id === id
++    )?.content
++  );
++}
++
++function images(messages: BaseMessage[]) {
++  return messages.flatMap((message) =>
++    message instanceof HumanMessage && Array.isArray(message.content)
++      ? message.content.filter(({ type }) => type === 'image_url')
++      : []
++  );
++}
++
++async function read(
++  scope: ToolImageRead,
++  messages: BaseMessage[],
++  args: Record<string, unknown>,
++  id = 'read'
++) {
++  const runtime = { state: { messages }, toolCallId: id } as RunnableConfig;
++  return (await scope.tool.invoke(
++    { name: 'read_image', type: 'tool_call', id, args },
++    runtime
++  )) as ToolMessage;
++}
++
++function setup() {
++  const a = result('a', first, second);
++  const b = result('b', third);
++  const source = request('mcp', 'a', 'b');
++  const scope = new ToolImageRead((block, callId) =>
++    callId === 'a' ? block === first || block === second : block === third
++  );
++  scope.start();
++  scope.accept(b);
++  scope.accept(a);
++  const state = [prompt, source, b, a];
++  const serving = project(scope, state);
++  const refs = Array.from(
++    output(serving, 'a').matchAll(/\[(img_[\w-]{16})\]/g),
++    (match) => match[1]
++  );
++  return { a, b, source, scope, state, serving, refs };
++}
++
++test('binds refs and image order to model calls and per-result order, and counts duplicates against the budget', async () => {
++  const { scope, state, serving, refs } = setup();
++  expect(refs.length).toBe(2);
++  expect(
++    images(serving).every((block, index) => block === original[index])
++  ).toBe(true);
++  expect(images(serving)).toHaveLength(3);
++  expect(output(serving, 'a')).toMatch(
++    /Image 1 .*\(tool image 1\)\nImage 2 .*\(tool image 2\)/
++  );
++  expect(output(serving, 'b')).toMatch(/Image 1 .*\(tool image 3\)/);
++  const calls = request(
++    'read_image',
++    'read1',
++    'read2',
++    'read3',
++    'read4',
++    'read5'
++  );
++  const reads = await Promise.all(
++    calls.tool_calls!.map(({ id }, index) =>
++      read(scope, [...state, calls], { ref: refs[index === 0 ? 1 : 0] }, id)
++    )
++  );
++  expect(
++    reads.every(
++      (message) =>
++        message.artifact == null && message.content === 'image_omitted'
++    )
++  ).toBe(true);
++  const projected = project(scope, [...state, calls, ...reads.reverse()]);
++  const selected = images(projected);
++  expect(selected).toHaveLength(4);
++  expect(
++    selected.every((image, index) => image === (index === 0 ? second : first))
++  ).toBe(true);
++  expect(output(projected, 'read1')).toBe('image_included (read image 1)');
++  expect(output(projected, 'read4')).toBe('image_included (read image 4)');
++  expect(output(projected, 'read5')).toBe('image_omitted');
++  expect(
++    images(
++      project(scope, [
++        ...state,
++        calls,
++        ...reads,
++        request('status', 'status'),
++        result('status'),
++      ])
++    )
++  ).toHaveLength(0);
++});
++
++test('reserves room for current images and reports omission at character and model budget boundaries', async () => {
++  const { scope, state, refs } = setup();
++  const calls = request('read_image', 'read', 'current');
++  const selected = await read(scope, [...state, calls], { ref: refs[1] });
++  const current = new ToolMessage({
++    id: 'current',
++    tool_call_id: 'current',
++    content: '',
++    artifact: { content: [third] },
++  });
++  const batch = [...state, calls, selected, current];
++  const charBudget =
++    getToolContentCharLength([third]) + getToolContentCharLength([second]) + 1;
++  const constrained = project(scope, batch, charBudget - 1);
++  expect(images(constrained).length).toBe(1);
++  expect(images(constrained)[0] === third).toBe(true);
++  expect(output(constrained, 'read')).toBe('image_omitted');
++  expect(output(project(scope, batch, charBudget), 'read')).toBe(
++    'image_included (read image 1)'
++  );
++  expect(
++    output(
++      project(
++        scope,
++        batch,
++        charBudget,
++        (messages) => images(messages).length <= 1
++      ),
++      'read'
++    )
++  ).toBe('image_omitted');
++});
++
++test('rejects forged, removed, replaced and cross-scope sources', async () => {
++  const { a, source, scope, state, refs } = setup();
++  const otherScope = new ToolImageRead(() => true);
++  otherScope.start();
++  const readPrompt = request('read_image', 'read');
++  const pending = [...state, readPrompt];
++  expect((await read(otherScope, pending, { ref: refs[0] })).content).toBe(
++    'image_unavailable'
++  );
++  expect(
++    (await read(scope, pending, { ref: 'img_zzzzzzzzzzzzzzzz' })).content
++  ).toBe('image_unavailable');
++  await expect(read(scope, pending, { ref: 1 })).rejects.toThrow();
++  await expect(
++    read(scope, pending, { ref: refs[0], extra: true })
++  ).rejects.toThrow();
++  await expect(
++    read(scope, pending, { ref: 'https://localhost/image.png' })
++  ).rejects.toThrow();
++  const removed = messagesStateReducer(pending, new RemoveMessage({ id: 'a' }));
++  expect((await read(scope, removed, { ref: refs[0] })).content).toBe(
++    'image_unavailable'
++  );
++  const replacement = result('a', second, first);
++  scope.accept(replacement);
++  const substituted = pending.map((message) =>
++    message === a ? replacement : message
++  );
++  expect((await read(scope, substituted, { ref: refs[0] })).content).toBe(
++    'image_unavailable'
++  );
++
++  const forged = result('a', inline('Zm9yZ2Vk'));
++  scope.accept(forged);
++  const forgedProjection = project(scope, [prompt, source, forged]);
++  expect(output(forgedProjection, 'a').includes('img_')).toBe(false);
++  const laterRead = await read(scope, pending, { ref: refs[0] });
++  expect(output(project(scope, [...removed, laterRead]), 'read')).toBe(
++    'image_unavailable'
++  );
++  expect(
++    (
++      await read(
++        scope,
++        [...pending, new HumanMessage({ id: 'new-turn', content: 'New turn' })],
++        { ref: refs[0] }
++      )
++    ).content
++  ).toBe('image_unavailable');
++  scope.end();
++  expect((await read(scope, pending, { ref: refs[0] })).content).toBe(
++    'image_unavailable'
++  );
++});
++
++test('registers at most 32 refs and allows reading an image omitted on initial projection', async () => {
++  const blocks = Array.from({ length: 33 }, (_, index) =>
++    inline(`image${index}`)
++  );
++  const scope = new ToolImageRead((block) =>
++    blocks.some((image) => image === block)
++  );
++  const source = result('source', ...blocks);
++  scope.start();
++  scope.accept(source);
++  const state = [request('mcp', 'source'), source];
++  const initial = project(scope, state, 1);
++  expect(images(initial)).toHaveLength(0);
++  const refs = [...output(initial, 'source').matchAll(/\[(img_[\w-]{16})\]/g)];
++  expect(refs.length).toBe(32);
++  const calls = request('read_image', 'read');
++  const selected = await read(scope, [...state, calls], { ref: refs[31][1] });
++  const projected = project(scope, [...state, calls, selected]);
++  expect(images(projected)[0] === blocks[31]).toBe(true);
++});
++
++test.each([
++  'eligible',
++  'fallback',
++  'checkpoint',
++  'tracing',
++  'continuation',
++  'chat-completions',
++])('binds read_image only when eligible (%s)', async (mode) => {
++  if (mode === 'tracing') {
++    jest.replaceProperty(process, 'env', {
++      ...process.env,
++      LANGSMITH_TRACING: 'true',
++    });
++  }
++  try {
++    const run = await Run.create({
++      runId: 'synthetic-image-read-gates',
++      isTrustedToolImage: () => true,
++      graphConfig: {
++        type: 'standard',
++        agents: [
++          {
++            agentId: 'synthetic-root',
++            provider: Providers.OPENAI,
++            clientOptions: {
++              apiKey: 'synthetic',
++              model: 'gpt-6.2-sol',
++              useResponsesApi: mode !== 'chat-completions',
++              ...(mode === 'fallback' && {
++                fallbacks: [
++                  {
++                    provider: Providers.OPENAI,
++                    clientOptions: { model: 'fallback' },
++                  },
++                ],
++              }),
++              ...(mode === 'continuation' && {
++                modelKwargs: { previous_response_id: 'synthetic' },
++              }),
++            },
++          },
++        ],
++        ...(mode === 'checkpoint' && {
++          compileOptions: { checkpointer: new MemorySaver() },
++        }),
++      },
++    });
++    expect(run.Graph?.imageRead?.tool.name).toBe(
++      mode === 'eligible' ? 'read_image' : undefined
++    );
++  } finally {
++    jest.restoreAllMocks();
++  }
++});
+diff --git a/src/tools/imageRead.ts b/src/tools/imageRead.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e79c78e0d85a73047c7ba20b18c61a41be9db611
+--- /dev/null
++++ b/src/tools/imageRead.ts
+@@ -0,0 +1,300 @@
++import { randomBytes } from 'node:crypto';
++import { DynamicStructuredTool } from '@langchain/core/tools';
++import {
++  AIMessage,
++  HumanMessage,
++  ToolMessage,
++  isHumanMessage,
++} from '@langchain/core/messages';
++import type {
++  BaseMessage,
++  MessageContentImageUrl,
++} from '@langchain/core/messages';
++import type { ToolRuntime } from '@langchain/core/tools';
++import type { BaseGraphState } from '@/types';
++import type { ArtifactProjection } from '@/messages/core';
++import {
++  cloneToolMessageWithContent,
++  getToolContentCharLength,
++} from '@/utils/toolContent';
++import { setProviderMessageProvenance } from '@/messages/provenance';
++import { latestArtifactToolBatch } from '@/messages/core';
++
++export const READ_IMAGE_TOOL = 'read_image';
++const REF_PATTERN = '^img_[A-Za-z0-9_-]{16}$';
++const refPattern = new RegExp(REF_PATTERN);
++const MAX_IMAGE_REFS = 32;
++const MAX_READS_PER_REQUEST = 4;
++
++/** Supplied by a trusted host after its tool and output policy accepted a result. */
++export type IsTrustedToolImage = (block: object, callId: string) => boolean;
++
++type InlineImage = MessageContentImageUrl & { image_url: { url: string } };
++
++type Source = {
++  ref: string;
++  callId: string;
++  parentId: string;
++  message: WeakRef<ToolMessage>;
++  index: number;
++  ordinal: number;
++  exposed: boolean;
++};
++
++function isInlineImage(block: unknown): block is InlineImage {
++  const image = block as Partial<InlineImage> | null | undefined;
++  return (
++    image?.type === 'image_url' &&
++    typeof image.image_url?.url === 'string' &&
++    /^data:image\/(png|jpeg|webp);base64,/.test(image.image_url.url)
++  );
++}
++
++function artifactBlocks(message: ToolMessage): Array<{ type?: string } | null> {
++  return Array.isArray(message.artifact?.content)
++    ? message.artifact.content
++    : [];
++}
++
++/** Owned by the root graph. Only the canonical ToolMessage owns the image bytes. */
++export class ToolImageRead {
++  private active = false;
++  private accepted = new WeakSet<ToolMessage>();
++  private selections = new WeakMap<ToolMessage, Source>();
++  private refs = new Map<string, Source>();
++
++  readonly tool = new DynamicStructuredTool<unknown>({
++    name: READ_IMAGE_TOOL,
++    description:
++      'Read one image by its reference from a tool result in this turn. Use this only when you need its pixels again or the image was omitted.',
++    schema: {
++      type: 'object',
++      properties: {
++        ref: {
++          type: 'string',
++          pattern: REF_PATTERN,
++          minLength: 20,
++          maxLength: 20,
++        },
++      },
++      required: ['ref'],
++      additionalProperties: false,
++    },
++    func: async (input, _manager, config): Promise<ToolMessage> => {
++      const runtime = config as ToolRuntime<Partial<BaseGraphState>>;
++      runtime.signal?.throwIfAborted();
++      return this.read(
++        input,
++        runtime.state.messages ?? [],
++        runtime.toolCallId
++      );
++    },
++  });
++
++  constructor(private readonly isTrustedImage: IsTrustedToolImage) {}
++
++  start(): void {
++    this.end();
++    this.active = true;
++  }
++
++  end(): void {
++    this.active = false;
++    this.refs.clear();
++    this.accepted = new WeakSet();
++    this.selections = new WeakMap();
++  }
++
++  accept(message: ToolMessage): void {
++    if (this.active && artifactBlocks(message).length > 0) {
++      this.accepted.add(message);
++    }
++  }
++
++  private sourceImage(
++    messages: BaseMessage[],
++    source: Source
++  ): InlineImage | undefined {
++    // A foreground stream may seed its prompt outside the graph message
++    // channel. The execution boundary still applies, as does any newer human turn.
++    const boundary = messages.findLastIndex(
++      (message) =>
++        isHumanMessage(message) ||
++        (message.id === source.parentId &&
++          message instanceof AIMessage &&
++          message.tool_calls?.some((call) => call.id === source.callId) ===
++            true)
++    );
++    if (!(messages[boundary] instanceof AIMessage)) return;
++    for (let index = boundary + 1; index < messages.length; index++) {
++      const message = messages[index];
++      if (!(message instanceof ToolMessage)) break;
++      if (message !== source.message.deref()) continue;
++      const block = artifactBlocks(message)[source.index];
++      if (isInlineImage(block) && this.isTrustedImage(block, source.callId))
++        return block;
++    }
++  }
++
++  private read(
++    input: unknown,
++    messages: BaseMessage[],
++    callId: string
++  ): ToolMessage {
++    const ref = (input as { ref?: unknown } | null | undefined)?.ref;
++    const valid =
++      typeof ref === 'string' &&
++      ref.length === 20 &&
++      refPattern.test(ref) &&
++      Object.keys(input as object).length === 1;
++    const source = valid && this.active ? this.refs.get(ref) : undefined;
++    const available =
++      source?.exposed === true && this.sourceImage(messages, source) != null;
++    let content = valid ? 'image_unavailable' : 'invalid_ref';
++    if (available) content = 'image_omitted';
++    const result = new ToolMessage({
++      name: READ_IMAGE_TOOL,
++      tool_call_id: callId,
++      status: available ? 'success' : 'error',
++      content,
++    });
++    if (available) this.selections.set(result, source);
++    return result;
++  }
++
++  private register(
++    messages: BaseMessage[],
++    batch: NonNullable<ReturnType<typeof latestArtifactToolBatch>>
++  ): void {
++    const parentId = batch.parent.id;
++    if (parentId == null || this.refs.size >= MAX_IMAGE_REFS) return;
++    for (const position of batch.toolIndices) {
++      const message = messages[position] as ToolMessage;
++      if (!this.accepted.has(message)) continue;
++      const callId = message.tool_call_id;
++      const blocks = artifactBlocks(message);
++      let ordinal = 0;
++      for (
++        let index = 0;
++        index < blocks.length && this.refs.size < MAX_IMAGE_REFS;
++        index++
++      ) {
++        const block = blocks[index];
++        if (block?.type === 'image_url') ordinal++;
++        if (!isInlineImage(block) || !this.isTrustedImage(block, callId))
++          continue;
++        if (
++          [...this.refs.values()].some(
++            (ref) => ref.message.deref() === message && ref.index === index
++          )
++        )
++          continue;
++        const ref = `img_${randomBytes(12).toString('base64url')}`;
++        this.refs.set(ref, {
++          ref,
++          callId,
++          parentId,
++          message: new WeakRef(message),
++          index,
++          ordinal,
++          exposed: false,
++        });
++      }
++    }
++  }
++
++  project(
++    canonical: BaseMessage[],
++    serving: BaseMessage[],
++    projection: ArtifactProjection,
++    fits: (messages: BaseMessage[]) => boolean
++  ): { messages: BaseMessage[]; exposed: Source[] } {
++    if (!this.active) return { messages: serving, exposed: [] };
++    const batch = latestArtifactToolBatch(canonical);
++    if (batch != null) this.register(canonical, batch);
++    if (this.refs.size === 0) return { messages: serving, exposed: [] };
++
++    const outputs = new Map<string, number>();
++    for (let index = 0; index < serving.length; index++) {
++      const message = serving[index];
++      if (message instanceof ToolMessage)
++        outputs.set(message.tool_call_id, index);
++    }
++
++    let messages = serving;
++    const exposed: Source[] = [];
++    const labels = new Map<number, { lines: string[]; sources: Source[] }>();
++    for (const source of this.refs.values()) {
++      const index = outputs.get(source.callId);
++      if (index == null) continue;
++      const block = this.sourceImage(canonical, source);
++      if (block == null) continue;
++      const imagePosition = projection.imagePositions.get(block);
++      const position =
++        imagePosition == null
++          ? ' (use read_image to view)'
++          : ` (tool image ${imagePosition})`;
++      const entry = labels.get(index) ?? { lines: [], sources: [] };
++      entry.lines.push(`Image ${source.ordinal} [${source.ref}]${position}`);
++      entry.sources.push(source);
++      labels.set(index, entry);
++    }
++    if (labels.size > 0) {
++      const labeled = [...serving];
++      for (const [index, { lines }] of labels) {
++        const message = serving[index] as ToolMessage;
++        const content =
++          typeof message.content === 'string'
++            ? `${message.content}\n${lines.join('\n')}`
++            : [
++                ...message.content,
++                { type: 'text' as const, text: lines.join('\n') },
++              ];
++        labeled[index] = cloneToolMessageWithContent(message, content);
++      }
++      if (fits(labeled)) {
++        messages = labeled;
++        for (const { sources } of labels.values()) exposed.push(...sources);
++      }
++    }
++
++    let remainingChars = projection.remainingChars;
++    const images: InlineImage[] = [];
++    for (const index of batch?.toolIndices ?? []) {
++      const result = canonical[index] as ToolMessage;
++      const source = this.selections.get(result);
++      const outputIndex = outputs.get(result.tool_call_id);
++      if (source == null || outputIndex == null) continue;
++      const image = this.sourceImage(canonical, source);
++      if (image == null) {
++        messages = [...messages];
++        messages[outputIndex] = cloneToolMessageWithContent(
++          result,
++          'image_unavailable'
++        );
++        continue;
++      }
++      if (images.length === MAX_READS_PER_REQUEST) continue;
++      const cost = getToolContentCharLength([image]) + 1;
++      if (cost > remainingChars) continue;
++      const nextImages = [...images, image];
++      const payload = new HumanMessage({ content: nextImages });
++      setProviderMessageProvenance(payload, [{ attribution: 'synthetic' }]);
++      const candidate = messages.slice(0, images.length > 0 ? -1 : undefined);
++      candidate[outputIndex] = cloneToolMessageWithContent(
++        result,
++        `image_included (read image ${nextImages.length})`
++      );
++      candidate.push(payload);
++      if (!fits(candidate)) continue;
++      messages = candidate;
++      images.push(image);
++      remainingChars -= cost;
++    }
++    return { messages, exposed };
++  }
++
++  confirm(exposed: Source[]): void {
++    for (const source of exposed) source.exposed = true;
++  }
++}
+diff --git a/src/types/run.ts b/src/types/run.ts
+index 64f1892593edb8eb099d8169dc4955596057d589..e42a62e898921d441a94d0beff88cbfd0f7f2f55 100644
+--- a/src/types/run.ts
++++ b/src/types/run.ts
+@@ -276,6 +276,8 @@ export interface StreamLimits {
+ export type RunConfig = {
+   runId: string;
+   graphConfig: LegacyGraphConfig | StandardGraphConfig | MultiAgentGraphConfig;
++  /** Attests an original inline image accepted by this run's host tool handler. */
++  isTrustedToolImage?: (block: object, callId: string) => boolean;
+   /**
+    * Run-scoped Langfuse configuration. Per-agent `AgentInputs.langfuse`
+    * takes precedence for agent-specific spans; this object supplies defaults

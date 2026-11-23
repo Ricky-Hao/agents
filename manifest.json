@@ -164,6 +164,13 @@
       "summary": "保留历史 fork 对上游发行任务的仓库限定",
       "depends_on": [],
       "commands": [["node", "--test", "config/workflow-syntax.test.mjs"]]
+    },
+    {
+      "id": "tool-image-read",
+      "status": "feature",
+      "summary": "通过同轮根图中的可信工具结果按需投影原图",
+      "depends_on": ["checkpoint-replay"],
+      "jest": ["src/tools/__tests__/imageRead.test.ts"]
     }
   ]
 }
