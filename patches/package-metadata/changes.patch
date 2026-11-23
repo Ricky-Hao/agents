@@ -1,11 +1,11 @@
 diff --git a/package-lock.json b/package-lock.json
-index 4728594ae919e2e475fefbeed8be094040a49286..84677f7718ff6ae755f1b72e38b38701d304ec03 100644
+index 4728594ae919e2e475fefbeed8be094040a49286..c0dd6198ba183b0e6110043bdd24de87e2288a73 100644
 GIT binary patch
-delta 190
-zcmaFSE&ZcgdV(ptZc%1(cBS4#lU5EW({TF14o2JQ^6`uso8=gjSQrhP8(G^MSs8(t
-zX?r6pGZ*{xg?3CP)A#c*3r;sQVNwl^bgqi<buu*$v<!%HD$X#k^fNCnNi4`LF$qsC
-zC{OkXHcAVy2+VLVcB%-jGL0-rkIYXBGk15-3D0r#%G3_3NDDPLcMl8+%rtTd_6f~R
-hG%<3Goc?eJqr_wdQT6stUS=R>0b<teoxE)EI{+WCJ(d6f
+delta 191
+zcmaFSE&ZcgdV(p3Zc%1(cBP)tMAH^Hd-}l+M%(G~@r)Xq<rtG#7!8{nS=$>~8G)E-
+zdm}3|7yI;uc1$MI_wz6dPB%1RQVorCu8Qz=GBpmg42W_n&M>d^GcPYmEXXV|2~RC3
+zPxc5lN(-<E%y2JustB$!jVwuz%ufn4cX!VT&vEq1)DEgh3pF=)4-5&+G;#^{3C&G3
+gF>;NZ{%{AQ#AF3g_4ZC)W*}w(V%F`QylnA107<Yt$^ZZW
 
 delta 169
 zcmey-E&ZZfdV=Xh+m`7UI~Z-J>&G){Y}R8;Vqr9Bp2*rhk(CjMnYK@4W#(d^uC$EN
@@ -14,14 +14,14 @@ zU5Y%Mv!gt!0^MCp^9v129D}mW3WF<MQc42dgI&@Kk}R{`a*9f;0?LZg%coz=WVCOe
 S$;%AHEI`b<eI_qk{0;yu>N+U^
 
 diff --git a/package.json b/package.json
-index af7679eb20607afcf80869b79f6df1594c6fa70d..ce759a1fd8ad3d27c961f813dde22a812588f3f5 100644
+index af7679eb20607afcf80869b79f6df1594c6fa70d..9ea1616304d55b135bcda9cac4953730f6bd3800 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,6 +1,6 @@
  {
    "name": "@librechat/agents",
 -  "version": "4.2.11",
-+  "version": "4.2.11-ricky.1",
++  "version": "4.2.11-ricky.2",
    "reova": {
      "enabled": true,
      "endpoint": "https://telemetry.reo.dev/data"
