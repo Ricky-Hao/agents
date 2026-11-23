@@ -308,30 +308,66 @@ describe('protected model-visible compaction history', () => {
     }
   );
 
-  it.each((['manual', 'trigger', 'overflow'] as const).flatMap(reason =>
-    [false, true].map(withFallback => ({reason, withFallback}))))(
+  it.each(
+    (['manual', 'trigger', 'overflow'] as const).flatMap((reason) =>
+      [false, true].map((withFallback) => ({ reason, withFallback }))
+    )
+  )(
     'persists the canonical tail after real masking for $reason with fallback=$withFallback',
-    async ({reason, withFallback}) => {
-      const {agentContext, node, model, fallback, completed} = harness({clientOptions: {model: 'primary',
-        fallbacks: withFallback ? [{provider: Providers.OPENAI, clientOptions: {model: 'fallback', maxTokens: 128}}] : [],
-      }});
+    async ({ reason, withFallback }) => {
+      const { agentContext, node, model, fallback, completed } = harness({
+        clientOptions: {
+          model: 'primary',
+          fallbacks: withFallback
+            ? [
+                {
+                  provider: Providers.OPENAI,
+                  clientOptions: { model: 'fallback', maxTokens: 128 },
+                },
+              ]
+            : [],
+        },
+      });
       if (withFallback) model.failure = () => new Error('Primary unavailable');
       const fixture = history();
-      const messages = fixture.messages.map(message => message instanceof ToolMessage
-        ? new ToolMessage({...message, content: `${message.id} CANONICAL_FULL_RESULT ` + 'evidence '.repeat(4_000)})
-        : message);
+      const messages = fixture.messages.map((message) =>
+        message instanceof ToolMessage
+          ? new ToolMessage({
+              ...message,
+              content:
+                `${message.id} CANONICAL_FULL_RESULT ` +
+                'evidence '.repeat(4_000),
+            })
+          : message
+      );
       const before = JSON.stringify(messages);
       const projection = agentContext.getProviderProjectedMessages(messages);
-      expect(maskConsumedToolResults({messages: projection, indexTokenCountMap: {}, tokenCounter: count, maxChars: 1_000})).toBe(2);
+      expect(
+        maskConsumedToolResults({
+          messages: projection,
+          indexTokenCountMap: {},
+          tokenCounter: count,
+          maxChars: 1_000,
+        })
+      ).toBe(2);
       const windowMessages = projection.slice(2);
       const canonicalTail = messages.slice(-fixture.tail.length);
       const projectedTail = windowMessages.slice(-fixture.tail.length);
       expect(projectedTail[2]).not.toBe(canonicalTail[2]);
-      expect(JSON.stringify(projectedTail[2].content).length).toBeLessThan(JSON.stringify(canonicalTail[2].content).length);
+      expect(JSON.stringify(projectedTail[2].content).length).toBeLessThan(
+        JSON.stringify(canonicalTail[2].content).length
+      );
       const projectionBefore = JSON.stringify(windowMessages);
-      const result = await node.invoke({messages, summarizationRequest: {agentId: agentContext.agentId,
-        reason, remainingContextTokens: 0, allowSummarization: true, windowMessages,
-      }});
+      const result = await node.invoke({
+        messages,
+        summarizationRequest: {
+          agentId: agentContext.agentId,
+          reason,
+          remainingContextTokens: 0,
+          allowSummarization: true,
+          windowMessages,
+        },
+      });
       const sent = (withFallback ? fallback : model).requests[0];
       expect(sent).toBeDefined();
       expect(JSON.stringify(sent)).not.toContain('evidence '.repeat(200));
@@ -339,7 +375,8 @@ describe('protected model-visible compaction history', () => {
       const surviving = messagesStateReducer(messages, result.messages ?? []);
       expect(surviving).toHaveLength(canonicalTail.length);
       expect(JSON.stringify(surviving)).toBe(JSON.stringify(canonicalTail));
-      for (let i = 0; i < canonicalTail.length; i++) expect(surviving[i]).toBe(canonicalTail[i]);
+      for (let i = 0; i < canonicalTail.length; i++)
+        expect(surviving[i]).toBe(canonicalTail[i]);
       expect(completed).toHaveLength(1);
       expect(JSON.stringify(messages)).toBe(before);
       expect(JSON.stringify(windowMessages)).toBe(projectionBefore);
@@ -526,37 +563,71 @@ describe('protected model-visible compaction history', () => {
   });
 
   it.each([
-    {withFallback: false, fallbackMode: undefined},
-    {withFallback: true, fallbackMode: undefined},
-    {withFallback: true, fallbackMode: 'input'},
-    {withFallback: true, fallbackMode: 'window'},
-  ] as const)('keeps corrected input units for inherited ceiling: %j', async ({withFallback, fallbackMode}) => {
-    const model = new CapturingSummaryModel();
-    if (withFallback) model.failure = () => new Error('Primary unavailable');
-    const {agentContext, node, fallback} = harness({model, maxContextTokens: 32_000,
-      clientOptions: {model: 'primary', maxTokens: 4_000, fallbacks: withFallback ? [{provider: Providers.OPENAI,
-        contextBudgetMode: fallbackMode,
-        clientOptions: {model: 'fallback', maxTokens: 2_660},
-      }] : []},
-      summarizationConfig: {contextBudgetMode: 'window', prompt: 'Checkpoint. '.repeat(150), maxSummaryTokens: 2_660, retainRecent: {turns: 0}},
-    });
-    await agentContext.tokenCalculationPromise;
-    agentContext.applyContextBudgetCorrection(26_600);
-    expect(agentContext.summarizationBudgetMode).toBe('input');
-    const head = new HumanMessage({id: 'corrected-head', content: 'x'.repeat(100_000)});
-    const result = await node.invoke({messages: [head], summarizationRequest: {agentId: agentContext.agentId,
-      remainingContextTokens: 0, reason: 'overflow', allowSummarization: true, windowMessages: [head],
-    }});
-    const successful = withFallback ? fallback : model;
-    expect(successful.requests).toHaveLength(1);
-    expect(successful.requests[0]).toContain(head);
-    expect(successful.requests[0].reduce((total, message) => total + count(message), 0)).toBeLessThanOrEqual(26_600);
-    expect(result.messages?.[0].getType()).toBe('remove');
-    expect(agentContext.getSummaryText()).toBe('PROTECTED_CHECKPOINT');
-    agentContext.reset();
-    expect(agentContext.summarizationBudgetMode).toBe('window');
-    expect(agentContext.maxContextTokens).toBe(32_000);
-  });
+    { withFallback: false, fallbackMode: undefined },
+    { withFallback: true, fallbackMode: undefined },
+    { withFallback: true, fallbackMode: 'input' },
+    { withFallback: true, fallbackMode: 'window' },
+  ] as const)(
+    'keeps corrected input units for inherited ceiling: %j',
+    async ({ withFallback, fallbackMode }) => {
+      const model = new CapturingSummaryModel();
+      if (withFallback) model.failure = () => new Error('Primary unavailable');
+      const { agentContext, node, fallback } = harness({
+        model,
+        maxContextTokens: 32_000,
+        clientOptions: {
+          model: 'primary',
+          maxTokens: 4_000,
+          fallbacks: withFallback
+            ? [
+                {
+                  provider: Providers.OPENAI,
+                  contextBudgetMode: fallbackMode,
+                  clientOptions: { model: 'fallback', maxTokens: 2_660 },
+                },
+              ]
+            : [],
+        },
+        summarizationConfig: {
+          contextBudgetMode: 'window',
+          prompt: 'Checkpoint. '.repeat(150),
+          maxSummaryTokens: 2_660,
+          retainRecent: { turns: 0 },
+        },
+      });
+      await agentContext.tokenCalculationPromise;
+      agentContext.applyContextBudgetCorrection(26_600);
+      expect(agentContext.summarizationBudgetMode).toBe('input');
+      const head = new HumanMessage({
+        id: 'corrected-head',
+        content: 'x'.repeat(100_000),
+      });
+      const result = await node.invoke({
+        messages: [head],
+        summarizationRequest: {
+          agentId: agentContext.agentId,
+          remainingContextTokens: 0,
+          reason: 'overflow',
+          allowSummarization: true,
+          windowMessages: [head],
+        },
+      });
+      const successful = withFallback ? fallback : model;
+      expect(successful.requests).toHaveLength(1);
+      expect(successful.requests[0]).toContain(head);
+      expect(
+        successful.requests[0].reduce(
+          (total, message) => total + count(message),
+          0
+        )
+      ).toBeLessThanOrEqual(26_600);
+      expect(result.messages?.[0].getType()).toBe('remove');
+      expect(agentContext.getSummaryText()).toBe('PROTECTED_CHECKPOINT');
+      agentContext.reset();
+      expect(agentContext.summarizationBudgetMode).toBe('window');
+      expect(agentContext.maxContextTokens).toBe(32_000);
+    }
+  );
 
   it.each([
     {

@@ -1,20 +1,20 @@
+import { describe, it, expect } from '@jest/globals';
 import {
   AIMessage,
   HumanMessage,
   SystemMessage,
   ToolMessage,
 } from '@langchain/core/messages';
-import { describe, it, expect } from '@jest/globals';
 import type { ToolConfiguration } from '@aws-sdk/client-bedrock-runtime';
 import type { BaseMessage } from '@langchain/core/messages';
-import {
-  isBedrockOpenAIModel,
-  convertToConverseMessages,
-} from './message_inputs';
 import {
   neutralizeHarmonyToolConfig,
   neutralizeHarmonyControlTokens,
 } from './harmony';
+import {
+  isBedrockOpenAIModel,
+  convertToConverseMessages,
+} from './message_inputs';
 
 const OPENAI_MODEL = 'global.openai.gpt-6.1-sol';
 const CLAUDE_MODEL = 'global.anthropic.claude-sonnet-5-5';

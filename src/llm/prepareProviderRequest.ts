@@ -122,6 +122,7 @@ export interface PrepareProviderRequestParams {
   config?: RunnableConfig;
   maxToolResultChars?: number;
   measure?: (messages: BaseMessage[]) => ProviderPayloadMeasurement;
+  projectResponsesImages?: (messages: BaseMessage[]) => BaseMessage[];
   toolHistory?: ToolHistoryPreparation;
 }
 
@@ -533,6 +534,7 @@ export function prepareProviderRequest({
   config,
   maxToolResultChars,
   measure,
+  projectResponsesImages,
   toolHistory = createToolHistoryPreparation(),
 }: PrepareProviderRequestParams): PreparedProviderRequest {
   const projectionMode = resolveProviderMessageProjectionMode(
@@ -570,14 +572,18 @@ export function prepareProviderRequest({
   const preparedMessages = providerRequiresStrictAlternation(provider)
     ? coalesceAdjacentUserTurns(cued)
     : cued;
+  const finalMessages =
+    projectionMode === 'openai-responses'
+      ? projectResponsesImages?.(preparedMessages) ?? preparedMessages
+      : preparedMessages;
 
   const request: PreparedProviderRequestData = {
     model,
     modelId,
     provider,
     projectionMode,
-    messages: preparedMessages,
-    measurement: measure?.(preparedMessages),
+    messages: finalMessages,
+    measurement: measure?.(finalMessages),
   };
   Object.defineProperty(request, preparedProviderRequestBrand, {
     value: true,

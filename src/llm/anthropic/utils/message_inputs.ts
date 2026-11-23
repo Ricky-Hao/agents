@@ -151,6 +151,10 @@ export function normalizeAnthropicToolCallId(
   return `${sanitized.slice(0, prefixMaxLength)}_${hash}`;
 }
 
+function isContentObject(block: unknown): block is object {
+  return typeof block === 'object' && block !== null && !isProxy(block);
+}
+
 /**
  * Lift any `cache_control` off the inner blocks of a tool result onto the
  * `tool_result` block itself. Anthropic documents the top-level
@@ -168,7 +172,7 @@ function hoistToolResultCacheControl(
   }
   let cacheControl: unknown;
   const stripped = content.map((block) => {
-    if (typeof block !== 'object' || block == null || isProxy(block)) {
+    if (!isContentObject(block)) {
       return block;
     }
     try {
@@ -211,7 +215,7 @@ function unwrapToolMessageResultContent(content: ToolMessage['content']): {
   }
 
   const block = content[0];
-  if (typeof block !== 'object' || block == null || isProxy(block)) {
+  if (!isContentObject(block)) {
     return { content, cacheControl: undefined, isError: undefined };
   }
 
@@ -350,15 +354,15 @@ function _ensureMessageContents(
           unwrapped.content == null
             ? undefined
             : _formatContent(
-              unwrapped.content === toolMessageContent
-                ? toolMessage
-                : cloneToolMessageWithContent(
-                  toolMessage,
+                unwrapped.content === toolMessageContent
+                  ? toolMessage
+                  : cloneToolMessageWithContent(
+                      toolMessage,
                       unwrapped.content as Parameters<
                         typeof cloneToolMessageWithContent
                       >[1]
-                )
-            );
+                    )
+              );
         // Hoist a tail cache_control off the inner content onto the
         // tool_result block itself (the documented cacheable position).
         const { content: hoistedContent, cacheControl: innerCacheControl } =
@@ -963,8 +967,8 @@ function _formatContent(message: BaseMessage) {
         ) {
           const matchingToolCall = isAIMessage(message)
             ? message.tool_calls?.find(
-              (toolCall) => toolCall.id === contentPartCopy.id
-            )
+                (toolCall) => toolCall.id === contentPartCopy.id
+              )
             : undefined;
           if (matchingToolCall) {
             contentPartCopy.input = matchingToolCall.args;
@@ -1140,11 +1144,11 @@ export function _convertMessagesToAnthropicPayload(
               clientToolCalls.length > 0
                 ? clientToolCalls.map(_convertLangChainToolCallToAnthropic)
                 : [
-                  {
-                    type: 'text' as const,
-                    text: ANTHROPIC_EMPTY_TEXT_PLACEHOLDER,
-                  },
-                ],
+                    {
+                      type: 'text' as const,
+                      text: ANTHROPIC_EMPTY_TEXT_PLACEHOLDER,
+                    },
+                  ],
           };
         } else {
           return {

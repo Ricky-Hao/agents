@@ -306,7 +306,11 @@ describe('StandardGraph final response reasoning fallback', () => {
       }),
       new AIMessageChunk({
         content: [
-          { type: 'text', text: 'The session is fixed.', phase: 'final_answer' },
+          {
+            type: 'text',
+            text: 'The session is fixed.',
+            phase: 'final_answer',
+          },
         ] as never,
       }),
     ]);
@@ -318,8 +322,8 @@ describe('StandardGraph final response reasoning fallback', () => {
 
     expect(new Set(messageDeltas.map((delta) => delta.id)).size).toBe(2);
     expect(contentParts).toEqual([
-      { type: 'text', text: 'Checking the session.' },
-      { type: 'text', text: 'The session is fixed.' },
+      { type: 'text', text: 'Checking the session.', phase: 'commentary' },
+      { type: 'text', text: 'The session is fixed.', phase: 'final_answer' },
     ]);
     expect(
       run.Graph.getRunSteps()

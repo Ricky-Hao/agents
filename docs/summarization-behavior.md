@@ -4,7 +4,7 @@
 
 LibreChat's agent context management uses a staged pipeline inspired by Claude Code's compaction approach. The behavior differs based on whether summarization is enabled or disabled for the agent.
 
-Both paths share **observation masking** as the first line of defense. The key difference is what happens when masking alone isn't enough: summarization-enabled agents compact the full conversation via an LLM call, while summarization-disabled agents apply progressively aggressive mechanical truncation.
+Both paths share **observation masking** as the first line of defense. When masking is insufficient, summarization-enabled agents summarize older context and retain a recent tail. Summarization-disabled agents apply progressively aggressive mechanical truncation.
 
 ---
 
@@ -72,31 +72,37 @@ The tier is returned from every prune call. Single-agent hosts can use `Run.getF
 
 4. **Pruning split**: `getMessagesWithinTokenLimit` determines which messages fit (`context`) and which overflow (`messagesToRefine`). Messages are kept newest-first.
 
-5. **Summarization trigger**: If `messagesToRefine` is non-empty, `shouldTriggerSummarization` evaluates the configured trigger (or defaults to "any pruned messages"). `shouldSkipSummarization` only blocks when the message count hasn't changed since the last summary (prevents re-summarizing identical content). If triggered: **full compaction** fires.
+5. **Summarization trigger**: If `messagesToRefine` is non-empty, `shouldTriggerSummarization` evaluates the configured trigger (or defaults to "any pruned messages"). The unchanged-message guard and consecutive-failure limit bound repeated attempts. If triggered, compaction selects an older head and a retained recent tail.
 
-### Full Compaction
+### Compaction and Retained History
 
 When summarization fires:
 
-- The **entire conversation** (un-masked originals from the snapshot) is sent to the summarizer — not just the dropped messages.
-- The summarizer produces a structured checkpoint covering the full conversation history.
-- Graph state is wiped completely (`createRemoveAllMessage()`) — no surviving messages.
-- The summary is stored on `AgentContext` but **not** injected into the system prompt (doesn't inflate `instructionTokens`).
+- The default policy retains up to two recent user-led turns, within a token budget of `min(16000, 16% of maxContextTokens)`.
+- Under pressure, older closed tool exchanges within one long turn can form the compactable head. Tool-call/result pairs stay balanced, and a lone user payload stays intact.
+- The summarizer sees bounded provider history and an instruction identifying the first retained message. Input bounding compresses tool output before omitting retained-tail context; it preserves the required head.
+- On success, graph state becomes `createRemoveAllMessage()` followed by the canonical retained messages. The summary carrier precedes that tail on subsequent model calls.
+- Setting `retainRecent: { turns: 0 }` restores full-history compaction with no retained tail. If there is no compactable head, automatic compaction skips; manual compaction reports `nothing_to_summarize`.
 
-### Post-Compaction Clean Slate
+### Summary Injection After Compaction
 
-After compaction, the message array is empty. On the next agent node turn:
+After compaction, `AgentContext` injects a generated-context `HumanMessage` before the retained tail. The carrier states that the summary may be incomplete or mistaken. It does not claim that the current model wrote it.
 
-- The system runnable detects `messages.length === 0` with a mid-run summary present.
-- It injects `[SystemMessage(instructions), HumanMessage(summary)]`.
-- The model reads the checkpoint as a user message and continues naturally — making tool calls or responding.
-- The summary competes for message budget rather than permanently reducing the instruction ceiling.
+With no retained tail, the next call starts with `[SystemMessage(instructions), HumanMessage(summary)]`. With a retained tail, the summary stays before those messages. The carrier is counted against the receiving model's budget.
 
 ### Summarization Invocation
 
-Raw conversation messages are sent to the LLM via `attemptInvoke` with the summarization instruction appended as the final HumanMessage. Tools are bound so providers that require tool definitions (e.g. Bedrock) accept the messages and cache-capable providers can reuse the tool-schema prefix. The summarization model does not currently pass through `AgentContext.systemRunnable`, so exact replay of the main request's full system + tools + messages prefix is not guaranteed.
+The selected provider history is sent through `attemptInvoke` with the summarization instruction appended as the final HumanMessage. Tools remain schema-only, so a summarizer cannot execute them. Compatible self-summarization requests reuse prompt-cache shaping; other providers use their own preparation and budget. Context-budget rejection can retry with a smaller input, and configured fallback providers are attempted when the primary fails.
 
-If the primary call fails, fallback providers are attempted (via `tryFallbackProviders`). If all providers fail, a metadata stub is generated mechanically — no LLM call, just tool names and message counts.
+If all providers fail, existing summary state, version, and history remain intact for automatic, overflow, and manual triggers. Empty output and interrupted attempts also cannot advance the compaction boundary. Failed steps close and emit `on_summarize_complete` with an error and classified `errorCode`; available attempt usage remains attached. Run-wide stream-limit failures propagate to the caller. Prompts preserve uncertainty about tool results and truncation.
+
+### 摘要流内容契约
+
+`on_summarize_delta` 的 `summary.content` 始终是内容块数组。字符串转成 text 块，合法内容块保持原顺序。结构化 reasoning 只提取 `summary` 中的文本，不输出对象或其他元数据。空 reasoning 不发送空 delta，也不能遮蔽同一 chunk 或后续 chunk 的正文。
+
+SDK 默认在摘要尝试成功后发送暂存的增量。增量中的 reasoning 只用于临时显示。完成事件用最终摘要替换临时内容，保存的摘要只取正文。只有 reasoning、空输出或失败的尝试不能推进摘要边界。
+
+消费方支持 `SummarizeDeltaEvent.reset` 时，可以设置 `summarizationConfig.streamDeltas: true` 以接收实时正文。收到 `reset` 后，用本次增量的内容替换步骤的临时内容。空数组会清除临时内容。
 
 ### Summarization Prompt
 
@@ -115,7 +121,7 @@ If masking + fit-to-budget still produce an **empty context** (no messages fit a
 - `initialSummary` from the prior run is included in the **system prompt** via `buildInstructionsString`.
 - `formatAgentMessages` drops messages before the summary boundary in the message chain.
 - The model sees the system prompt (with summary) + the user's new message.
-- Mid-run summaries do NOT go into the system prompt — they use the HumanMessage injection on clean slate.
+- Mid-run summaries use the HumanMessage carrier before retained history.
 
 ---
 
@@ -154,8 +160,8 @@ Messages that get pruned are **gone** — no summary captures them. The model lo
 
 | Scenario                     | Where                                       | Why                                                        |
 | ---------------------------- | ------------------------------------------- | ---------------------------------------------------------- |
-| Mid-run post-compaction      | `HumanMessage` when `messages.length === 0` | Clean slate; doesn't inflate `instructionTokens`           |
-| Mid-run subsequent turns     | Nowhere — already consumed                  | Model read the checkpoint and is working from it           |
+| Mid-run post-compaction      | `HumanMessage` before retained history      | Preserve checkpoint and tail ordering                      |
+| Mid-run subsequent turns     | Carrier stays before the retained tail      | Keep the checkpoint available with recent context          |
 | Cross-run (`initialSummary`) | System prompt via `buildInstructionsString` | One-time cost; model needs it alongside user's new message |
 | No summary                   | N/A                                         | Normal `[SystemMessage, ...messages]`                      |
 
@@ -177,9 +183,9 @@ Masking uses `truncateToolResultContent` with a ~300 char limit, producing head+
 
 1. **Summarization IS the pruning** — when enabled, no messages are hard-pruned without being captured in a summary first. The summary replaces dropped messages.
 
-2. **Full compaction over rolling summary** — each compaction sees the entire conversation, avoiding compound information loss from summarizing summaries-of-summaries.
+2. **Retain recent context** — summarize the older head while preserving a bounded tail of canonical messages and complete tool exchanges.
 
-3. **Summary as user message, not system prompt** — mid-run summaries are injected as a HumanMessage to avoid inflating `instructionTokens` and shrinking the available budget for messages.
+3. **Generated-context carrier** — mid-run summaries use a HumanMessage that preserves uncertainty and precedes retained history.
 
 4. **Observation masking for both paths** — consumed tool results are masked regardless of whether summarization is enabled. The model's own AI message text preserves what it concluded from those results.
 
@@ -193,18 +199,23 @@ Masking uses `truncateToolResultContent` with a ~300 char limit, producing head+
 
 ### `librechat.yaml` — `summarization` block
 
-| Field              | Type           | Default                    | Description                                                                            |
-| ------------------ | -------------- | -------------------------- | -------------------------------------------------------------------------------------- |
-| `enabled`          | `boolean`      | `true`                     | Top-level kill switch. Set `false` to disable summarization globally.                  |
-| `provider`         | `string`       | Agent's own provider       | LLM provider for the summarizer (e.g. `anthropic`, `bedrock`).                         |
-| `model`            | `string`       | Agent's own model          | Model for summarization calls.                                                         |
-| `parameters`       | `object`       | `{}`                       | Extra LLM constructor params (temperature, etc.). Also accepts `maxSummaryTokens`.     |
-| `prompt`           | `string`       | Built-in checkpoint prompt | Custom prompt for initial summarization.                                               |
-| `updatePrompt`     | `string`       | Built-in update prompt     | Custom prompt for re-compaction when a prior summary exists. Falls back to `prompt`.   |
-| `trigger`          | `object`       | Always on overflow         | When to fire summarization. See trigger types below.                                   |
-| `reserveRatio`     | `number (0-1)` | `0.05`                     | Fraction of token budget reserved as headroom. Pruning triggers at `budget * (1 - r)`. |
-| `maxSummaryTokens` | `number`       | Provider/client default    | Optional max output tokens for the summarization model.                                |
-| `contextPruning`   | `object`       | disabled                   | Position-based context pruning (only applies when summarization is disabled).          |
+| Field              | Type           | Default                    | Description                                                                                                      |
+| ------------------ | -------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `enabled`          | `boolean`      | `true`                     | Top-level kill switch. Set `false` to disable summarization globally.                                            |
+| `provider`         | `string`       | Agent's own provider       | LLM provider for the summarizer (e.g. `anthropic`, `bedrock`).                                                   |
+| `model`            | `string`       | Agent's own model          | Model for summarization calls.                                                                                   |
+| `parameters`       | `object`       | `{}`                       | Extra LLM constructor params (temperature, etc.). Also accepts `maxSummaryTokens`.                               |
+| `prompt`           | `string`       | Built-in checkpoint prompt | Custom prompt for initial summarization.                                                                         |
+| `updatePrompt`     | `string`       | Built-in update prompt     | Custom prompt for re-compaction when a prior summary exists. Falls back to `prompt`.                             |
+| `trigger`          | `object`       | Always on overflow         | When to fire summarization. See trigger types below.                                                             |
+| `reserveRatio`     | `number (0-1)` | `0.05`                     | Fraction of token budget reserved as headroom. Pruning triggers at `budget * (1 - r)`.                           |
+| `maxSummaryTokens` | `number`       | Provider/client default    | Optional max output tokens for the summarization model.                                                          |
+| `retainRecent`     | `object`       | Two turns, bounded tokens  | `turns` selects recent user-led turns; `tokens` sets the retained budget. `{ turns: 0 }` summarizes all history. |
+| `contextPruning`   | `object`       | disabled                   | Position-based context pruning (only applies when summarization is disabled).                                    |
+
+### SDK-only budget setting
+
+`SummarizationConfig.contextBudgetMode` defaults to `input`; set it to `window` when the configured context ceiling covers the full model window, including output. Hosts must explicitly map this SDK field before exposing it through their own configuration. The consumer YAML adapter does not currently forward it.
 
 ### Trigger types (`trigger` field)
 

@@ -102,6 +102,8 @@ export type SummarizationConfig = {
   contextBudgetMode?: ContextBudgetMode;
   /** Fraction of the token budget reserved as headroom (0–1). Defaults to 0.05. */
   reserveRatio?: number;
+  /** Stream summary text as it arrives. Enable only when the consumer handles delta `reset`. */
+  streamDeltas?: boolean;
   /**
    * Recent-message preservation policy.  When unset, defaults to
    * `{ turns: 2 }` so the last two user-led turns are kept verbatim

@@ -371,10 +371,10 @@ class ScopedLangfuseCallbackHandler extends CallbackHandler {
       ...handlerParams,
       ...(inheritTraceIdentity === true
         ? {
-          userId: undefined,
-          sessionId: undefined,
-          traceMetadata: undefined,
-        }
+            userId: undefined,
+            sessionId: undefined,
+            traceMetadata: undefined,
+          }
         : {}),
     });
     this.langfuse = langfuse;
@@ -513,9 +513,9 @@ class ScopedLangfuseCallbackHandler extends CallbackHandler {
       : currentContext;
     const activeContext = isDetachedRun
       ? detachForeignAmbientSpan(
-        parentedContext,
-        resolveLangfuseDestinationKey(langfuse)
-      )
+          parentedContext,
+          resolveLangfuseDestinationKey(langfuse)
+        )
       : parentedContext;
     const scoped = (): T =>
       withLangfuseRuntimeScope(
@@ -576,9 +576,9 @@ class ScopedLangfuseCallbackHandler extends CallbackHandler {
     return otelContext.with(cleanContext, () =>
       hasIdentity
         ? propagateAttributes(
-          { userId, sessionId, tags, metadata, traceName },
-          scoped
-        )
+            { userId, sessionId, tags, metadata, traceName },
+            scoped
+          )
         : scoped()
     );
   }

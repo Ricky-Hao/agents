@@ -1,19 +1,16 @@
 import { tmpdir } from 'os';
 import { join } from 'path';
-import type { SpawnOptions } from 'child_process';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { describe, it, expect, afterEach } from '@jest/globals';
+import type { SpawnOptions } from 'child_process';
+import type { LocalSpawn } from '@/types';
 import {
   createLocalGrepSearchTool,
-  createLocalReadFileTool, _resetRipgrepCacheForTests
+  createLocalReadFileTool,
+  _resetRipgrepCacheForTests,
 } from '../local/LocalCodingTools';
-import {
-  capHeadTail,
-  capLines,
-  tailTruncate,
-} from '../local/toolResultCaps';
+import { capHeadTail, capLines, tailTruncate } from '../local/toolResultCaps';
 import { createLocalBashExecutionTool } from '../local/LocalExecutionTools';
-import type { LocalSpawn } from '@/types';
 
 const tempDirs: string[] = [];
 
@@ -52,7 +49,9 @@ describe('toolResultMaxChars', () => {
     const text = `HEAD\n${'m\n'.repeat(2000)}TAIL summary\n`;
     const capped = capHeadTail(text, 400);
     expect(capped.startsWith('HEAD')).toBe(true);
-    expect(capped).toMatch(/\[\.\.\. \d+ characters omitted; rerun with narrower output/);
+    expect(capped).toMatch(
+      /\[\.\.\. \d+ characters omitted; rerun with narrower output/
+    );
     expect(capped.trimEnd().endsWith('TAIL summary')).toBe(true);
     expect(capped.length).toBeLessThan(600);
     expect(capHeadTail('short', 400)).toBe('short');
@@ -153,7 +152,10 @@ describe('toolResultMaxChars', () => {
       join(cwd, 'many.py'),
       Array.from({ length: 200 }, (_, i) => `needle_${i} = ${i}`).join('\n')
     );
-    await writeFile(join(cwd, 'big.txt'), Buffer.alloc(6 * 1024 * 1024, 'a'));
+    await writeFile(
+      join(cwd, `${'long-file-name-'.repeat(8)}.txt`),
+      Buffer.alloc(6 * 1024 * 1024, 'a')
+    );
     const capped = String(
       await createLocalGrepSearchTool({
         cwd,
@@ -163,6 +165,7 @@ describe('toolResultMaxChars', () => {
     );
     expect(capped).toMatch(/more matching lines not shown/);
     expect(capped).toMatch(/skipped/);
+    expect(capped).toMatch(/\nskipped: /);
   });
 
   it('caps fallback grep pattern errors', async () => {

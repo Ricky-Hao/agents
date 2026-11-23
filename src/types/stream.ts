@@ -440,6 +440,9 @@ export type SummaryCoverage = {
 
 export type SummaryContentBlock = {
   type: ContentTypes.SUMMARY;
+  outcome?: 'success' | 'failed';
+  failed?: boolean;
+  summarizing?: boolean;
   content?: MessageContentComplex[];
   /** Injection budget: provider output-token space when usage was reported, plus
    *  the wrapper added at injection time. Not comparable with per-message counts

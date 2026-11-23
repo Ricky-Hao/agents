@@ -457,12 +457,14 @@ describe('compaction request windows', () => {
 
   it('replaces partial output from an overloaded attempt when the retry streams', async () => {
     jest.useFakeTimers();
-    const { node, model, emitted, graph } = harness();
+    const { node, model, emitted, graph } = harness({
+      summarizationConfig: { maxSummaryTokens: 128, streamDeltas: true },
+    });
     model.failure = (_sent, attempt) =>
       attempt === 1
         ? new Error(
-          'Our servers are currently overloaded. Please try again later.'
-        )
+            'Our servers are currently overloaded. Please try again later.'
+          )
         : undefined;
     const messages = history(6);
     const pending = node(
@@ -767,6 +769,7 @@ describe('compaction request windows', () => {
     failed.failure = () => new Error('Fallback failed');
     const { node, emitted } = harness({
       model: primary,
+      summarizationConfig: { maxSummaryTokens: 128, streamDeltas: true },
       clientOptions: {
         fallbacks: [
           { provider: Providers.OPENAI, clientOptions: { model: 'failed' } },
@@ -842,6 +845,7 @@ describe('compaction request windows', () => {
     failed.failure = () => new Error('Fallback failed');
     const { node, emitted, agentContext } = harness({
       model: primary,
+      summarizationConfig: { maxSummaryTokens: 128, streamDeltas: true },
       clientOptions: {
         fallbacks: [
           { provider: Providers.OPENAI, clientOptions: { model: 'failed' } },
@@ -1820,10 +1824,10 @@ describe('compaction request windows', () => {
       expect(step.usage).toMatchObject(
         reasoningAttempts === 1
           ? {
-            prompt_tokens: 300,
-            completion_tokens: 94,
-            total_tokens: 394,
-          }
+              prompt_tokens: 300,
+              completion_tokens: 94,
+              total_tokens: 394,
+            }
           : { prompt_tokens: 300, completion_tokens: 222, total_tokens: 522 }
       );
       if (reasoningAttempts === 1) {
@@ -2294,20 +2298,18 @@ describe('compaction request windows', () => {
     primary.failure = () => new Error('Primary failed');
     const truncated = new SummaryModel();
     Object.defineProperty(truncated, 'stream', { value: undefined });
-    jest
-      .spyOn(truncated, 'invoke')
-      .mockResolvedValue(
-        new AIMessageChunk({
-          content: '',
-          tool_calls: [{ id: 'truncated', name: 'search', args: {} }],
-          response_metadata: { stopReason: 'max_tokens' },
-          usage_metadata: {
-            input_tokens: 100,
-            output_tokens: 50,
-            total_tokens: 150,
-          },
-        })
-      );
+    jest.spyOn(truncated, 'invoke').mockResolvedValue(
+      new AIMessageChunk({
+        content: '',
+        tool_calls: [{ id: 'truncated', name: 'search', args: {} }],
+        response_metadata: { stopReason: 'max_tokens' },
+        usage_metadata: {
+          input_tokens: 100,
+          output_tokens: 50,
+          total_tokens: 150,
+        },
+      })
+    );
     const successful = new SummaryModel();
     successful.summaryUsage = {
       input_tokens: 321,
@@ -2442,11 +2444,11 @@ describe('compaction request windows', () => {
           fallbacks:
             mode === 'fallback'
               ? [
-                {
-                  provider: Providers.ANTHROPIC,
-                  clientOptions: { model: 'secondary' },
-                },
-              ]
+                  {
+                    provider: Providers.ANTHROPIC,
+                    clientOptions: { model: 'secondary' },
+                  },
+                ]
               : [],
         },
         summarizationConfig: {
@@ -2587,12 +2589,12 @@ describe('compaction request windows', () => {
           fallbacks:
             mode === 'fallback'
               ? [
-                {
-                  provider: Providers.ANTHROPIC,
-                  maxContextTokens,
-                  clientOptions: { model: 'production', maxTokens: 128 },
-                },
-              ]
+                  {
+                    provider: Providers.ANTHROPIC,
+                    maxContextTokens,
+                    clientOptions: { model: 'production', maxTokens: 128 },
+                  },
+                ]
               : [],
         },
         summarizationConfig: {
@@ -2762,9 +2764,13 @@ describe('compaction request windows', () => {
     }
   );
 
-  it.each(['failure', 'empty'] as const)(
-    'withdraws all fallback deltas after %s',
-    async (outcome) => {
+  it.each([
+    { outcome: 'failure', streamDeltas: true },
+    { outcome: 'empty', streamDeltas: true },
+    { outcome: 'failure', streamDeltas: undefined },
+  ])(
+    'clears fallback deltas after $outcome with streamDeltas=$streamDeltas',
+    async ({ outcome, streamDeltas }) => {
       const primary = new SummaryModel();
       const failed = new SummaryModel();
       primary.failure = () => new Error('Primary failed');
@@ -2774,16 +2780,17 @@ describe('compaction request windows', () => {
       jest.spyOn(empty, 'invoke').mockResolvedValue(new AIMessageChunk(''));
       const { node, emitted, agentContext } = harness({
         model: primary,
+        summarizationConfig: { maxSummaryTokens: 128, streamDeltas },
         clientOptions: {
           fallbacks: [
             { provider: Providers.OPENAI, clientOptions: { model: 'failed' } },
             ...(outcome === 'empty'
               ? [
-                {
-                  provider: Providers.OPENAI,
-                  clientOptions: { model: 'empty' },
-                },
-              ]
+                  {
+                    provider: Providers.OPENAI,
+                    clientOptions: { model: 'empty' },
+                  },
+                ]
               : []),
           ],
         },
@@ -2812,6 +2819,17 @@ describe('compaction request windows', () => {
       expect(JSON.stringify(messages)).toBe(before);
       expect(agentContext.getSummaryText()).toBeUndefined();
       expect(streamedSummary(emitted)).toBe('');
+      const deltas = emitted.filter(
+        ({ event }) => event === GraphEvents.ON_SUMMARIZE_DELTA
+      );
+      if (streamDeltas === true) {
+        expect(deltas.at(-1)?.data).toMatchObject({
+          reset: true,
+          delta: { summary: { content: [] } },
+        });
+      } else {
+        expect(deltas).toHaveLength(0);
+      }
       expect(
         JSON.stringify(
           emitted.filter(
@@ -2875,9 +2893,15 @@ describe('compaction request windows', () => {
     );
   });
 
-  it('publishes each delta while the provider is still responding', async () => {
+  it.each([
+    { streamDeltas: true, seen: [0, 1] },
+    { streamDeltas: undefined, seen: [0, 0] },
+  ])('delivers summary deltas with streamDeltas=$streamDeltas', async ({ streamDeltas, seen }) => {
     const model = new SummaryModel();
-    const { node, emitted } = harness({ model });
+    const { node, emitted } = harness({
+      model,
+      summarizationConfig: { maxSummaryTokens: 128, streamDeltas },
+    });
     const seenAtChunk: number[] = [];
     const stream = model._streamResponseChunks.bind(model);
     jest
@@ -2904,8 +2928,7 @@ describe('compaction request windows', () => {
       },
       {}
     );
-    /** The first chunk's delta is out before the provider yields the second. */
-    expect(seenAtChunk).toEqual([0, 1]);
+    expect(seenAtChunk).toEqual(seen);
     expect(streamedSummary(emitted)).toBe('CLEAN_SUMMARY');
     expect(
       emitted

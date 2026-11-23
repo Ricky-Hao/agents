@@ -29,9 +29,9 @@ import type {
   MessageContentReasoningBlock,
 } from '../types';
 import { serializeStructuredValueBounded } from '@/utils/toolContent';
-import { neutralizeHarmonyRequest } from './harmony';
 import { isReasoningContentBlock } from '@/messages/reasoningTypes';
 import { HARD_MAX_TOOL_RESULT_CHARS } from '@/utils/truncation';
+import { neutralizeHarmonyRequest } from './harmony';
 
 /**
  * Reasoning blocks from other providers, relative to Bedrock. Bedrock's native

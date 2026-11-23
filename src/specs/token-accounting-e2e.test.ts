@@ -111,7 +111,9 @@ const INSTRUCTIONS = 'You are a helpful math tutor. Be concise.';
 
 function addAccountingPressure(history: BaseMessage[]): void {
   const detail =
-    'Keep the verified result, token usage, calibration ratio, and summary overhead for the next run. '.repeat(2);
+    'Keep the verified result, token usage, calibration ratio, and summary overhead for the next run. '.repeat(
+      2
+    );
   const pressure: BaseMessage[] = [];
   for (let turn = 0; turn < 8; turn++) {
     pressure.push(
@@ -193,8 +195,10 @@ describe('Token accounting E2E — Run + Graph + real token counter', () => {
         summarizationEnabled: true,
         summarizationConfig: {
           provider: Providers.OPENAI,
-          prompt: 'Checkpoint the verified results and accounting context concisely.',
-          updatePrompt: 'Merge the new accounting context into the prior checkpoint.',
+          prompt:
+            'Checkpoint the verified results and accounting context concisely.',
+          updatePrompt:
+            'Merge the new accounting context into the prior checkpoint.',
           maxSummaryTokens: 64,
         },
         initialSummary: opts.initialSummary,
@@ -319,7 +323,6 @@ describe('Token accounting E2E — Run + Graph + real token counter', () => {
     // Token count should match what our real counter computes
     const summaryTokenCount = completePayload.summary!.tokenCount ?? 0;
     expect(summaryTokenCount).toBeGreaterThan(5);
-
   });
 
   // =========================================================================

@@ -21,6 +21,26 @@ function skillToolCall(
 }
 
 describe('formatAgentMessages skill body reconstruction', () => {
+  it('retains resolved source identity and marks the historical invocation version unknown', () => {
+    const { messages } = formatAgentMessages(
+      [{ role: 'assistant', content: [skillToolCall('call', 'fixture')] }],
+      undefined,
+      undefined,
+      new Map([
+        [
+          'fixture',
+          { body: 'original body', skillId: 'known-id', skillVersion: 4 },
+        ],
+      ])
+    );
+    const skill = messages.find(
+      (message) => message.additional_kwargs.source === 'skill'
+    );
+    expect(skill?.content).toContain('"id":"known-id"');
+    expect(skill?.content).toContain('"version":4');
+    expect(skill?.content).toContain('"historicalVersion":"unknown"');
+    expect(String(skill?.content).match(/original body/g)).toHaveLength(1);
+  });
   const skillBodies = new Map([
     ['pdf-analyzer', '# PDF Analyzer\nAnalyze PDF files step by step.'],
     ['code-review', '# Code Review\nReview the code for issues.'],
@@ -56,10 +76,11 @@ describe('formatAgentMessages skill body reconstruction', () => {
       expect(messages.length).toBeGreaterThanOrEqual(4);
       const last = messages[messages.length - 1];
       expect(last).toBeInstanceOf(HumanMessage);
-      expect(last.content).toBe(
+      expect(last.content).toContain(
         '# PDF Analyzer\nAnalyze PDF files step by step.'
       );
       expect((last as HumanMessage).additional_kwargs.source).toBe('skill');
+      expect(last.content).toContain('"historicalVersion":"unknown"');
       expect((last as HumanMessage).additional_kwargs.skillName).toBe(
         'pdf-analyzer'
       );
@@ -132,7 +153,7 @@ describe('formatAgentMessages skill body reconstruction', () => {
           (m as HumanMessage).additional_kwargs.source === 'skill'
       );
       expect(injected).toHaveLength(1);
-      expect(injected[0].content).toBe(
+      expect(injected[0].content).toContain(
         '# Code Review\nReview the code for issues.'
       );
     });
@@ -404,7 +425,7 @@ describe('formatAgentMessages skill body reconstruction', () => {
       let assistantTotal = 0;
       for (const [idx, count] of Object.entries(indexTokenCountMap!)) {
         if (Number(idx) > 0 && Number(idx) < injectedIndex) {
-          assistantTotal += count ?? 0;
+          assistantTotal += count;
         }
       }
       expect(assistantTotal).toBe(500);

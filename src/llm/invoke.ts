@@ -680,9 +680,13 @@ export async function attemptInvoke(
     policy == null
       ? preparedRequest
       : {
-        ...preparedRequest,
-        model: withProviderTextBoundary(preparedRequest.model, policy, provider),
-      };
+          ...preparedRequest,
+          model: withProviderTextBoundary(
+            preparedRequest.model,
+            policy,
+            provider
+          ),
+        };
   const configuredModel =
     providerStampedConfig.metadata?.[Constants.INVOKED_MODEL];
   const modelId =
@@ -695,9 +699,9 @@ export async function attemptInvoke(
       ...(modelId == null
         ? {}
         : {
-          [Constants.INVOKED_MODEL]: modelId,
-          model: modelId,
-        }),
+            [Constants.INVOKED_MODEL]: modelId,
+            model: modelId,
+          }),
       /**
        * One `attemptInvoke` call is one model attempt; primary, fallback,
        * and retry attempts within a node otherwise share the same langgraph
@@ -749,11 +753,18 @@ export async function attemptInvoke(
   } catch (error) {
     if (policy != null && config?.signal?.aborted === true) {
       const reason: unknown = config.signal.reason;
-      if (reason instanceof StreamLimitExceededError || reason instanceof PreparedSubagentError) {
+      if (
+        reason instanceof StreamLimitExceededError ||
+        reason instanceof PreparedSubagentError
+      ) {
         prepared?.finish(preparedAttempt, undefined, reason);
         throw reason;
       }
-      const cancelled = new ProviderTextProtectionError(reason instanceof ProviderTextProtectionError ? reason.code : 'cancelled');
+      const cancelled = new ProviderTextProtectionError(
+        reason instanceof ProviderTextProtectionError
+          ? reason.code
+          : 'cancelled'
+      );
       prepared?.finish(preparedAttempt, undefined, cancelled);
       throw cancelled;
     }
@@ -808,8 +819,8 @@ async function attemptInvokeBody(
       provider,
       captureRunId: captureModelRunId
         ? (runId: string): void => {
-          sealedRunId ??= runId;
-        }
+            sealedRunId ??= runId;
+          }
         : undefined,
     });
   }
@@ -863,12 +874,12 @@ async function attemptInvokeBody(
       restartController == null
         ? invocationConfig
         : {
-          ...invocationConfig,
-          signal: composeAbortSignals(
-            invocationConfig.signal,
-            restartController.signal
-          ),
-        };
+            ...invocationConfig,
+            signal: composeAbortSignals(
+              invocationConfig.signal,
+              restartController.signal
+            ),
+          };
     const restartGraceMs = resolveRestartGraceMs(
       context?.preemption?.restartGraceMs
     );
@@ -1056,7 +1067,11 @@ async function attemptInvokeBody(
         notePreemptRestartedRun(sealedRunId, finalChunk);
       }
       restartRoute = 'aborted';
-      restartController.abort(providerTextProtection == null ? undefined : createProviderTextRestartCancellation());
+      restartController.abort(
+        providerTextProtection == null
+          ? undefined
+          : createProviderTextRestartCancellation()
+      );
       return true;
     };
     const unsubscribeWake =
@@ -1323,7 +1338,8 @@ async function attemptInvokeBody(
         restartRoute === 'aborted' &&
         !(error instanceof StreamLimitExceededError) &&
         !(error instanceof PreparedSubagentError) &&
-        (!(error instanceof ProviderTextProtectionError) || isProviderTextRestartCancellation(error)) &&
+        (!(error instanceof ProviderTextProtectionError) ||
+          isProviderTextRestartCancellation(error)) &&
         config.signal?.aborted !== true;
       if (!ownAbort) {
         throw error;
@@ -1617,7 +1633,11 @@ export async function tryFallbackProviders({
     config?: RunnableConfig;
   }) => BaseMessage[] | Promise<BaseMessage[]>;
 }): Promise<Partial<t.BaseGraphState> | undefined> {
-  if (primaryError instanceof ProviderTextProtectionError || isProviderCancellation(primaryError)) throw primaryError;
+  if (
+    primaryError instanceof ProviderTextProtectionError ||
+    isProviderCancellation(primaryError)
+  )
+    throw primaryError;
   config?.signal?.throwIfAborted();
   const isOverflow = (
     error: unknown,
@@ -1641,7 +1661,7 @@ export async function tryFallbackProviders({
         provider: fb.provider,
         clientOptions: fb.clientOptions,
         tools,
-        ...(disableToolCalling == null ? {} : {disableToolCalling}),
+        ...(disableToolCalling == null ? {} : { disableToolCalling }),
       });
       /**
        * Stamp the fallback's configured model onto callback metadata so
@@ -1655,12 +1675,12 @@ export async function tryFallbackProviders({
         fbModelName == null
           ? config
           : {
-            ...config,
-            metadata: {
-              ...(config?.metadata ?? {}),
-              [Constants.INVOKED_MODEL]: fbModelName,
-            },
-          };
+              ...config,
+              metadata: {
+                ...(config?.metadata ?? {}),
+                [Constants.INVOKED_MODEL]: fbModelName,
+              },
+            };
       const preparationInput = {
         model: fbModel as t.ChatModel,
         messages,
@@ -1757,8 +1777,8 @@ export async function tryFallbackProviders({
         maxContextTokens: fb.maxContextTokens,
         ...(overflowContext?.provider === fb.provider
           ? {
-            estimatedPromptTokens: overflowContext.estimatedPromptTokens,
-          }
+              estimatedPromptTokens: overflowContext.estimatedPromptTokens,
+            }
           : {}),
       };
       if (isOverflow(e, fallbackOverflowContext)) {

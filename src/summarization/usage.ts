@@ -22,7 +22,8 @@ function normalizeBedrockInputUsage(
   const input = tokenCount(usage.input_tokens);
   if (input == null || input !== tokenCount(raw?.inputTokens)) return usage;
 
-  const cached = (tokenCount(raw?.cacheReadInputTokens) ?? 0) +
+  const cached =
+    (tokenCount(raw?.cacheReadInputTokens) ?? 0) +
     (tokenCount(raw?.cacheWriteInputTokens) ?? 0);
   return cached === 0 ? usage : { ...usage, input_tokens: input + cached };
 }
@@ -31,14 +32,17 @@ export function readSummarizationUsage(
   response: BaseMessage | undefined
 ): Partial<UsageMetadata> | undefined {
   if (response == null) return undefined;
-  const metadata = response.response_metadata as {
-    usage?: BedrockSummarizationUsage;
-    metadata?: { usage?: BedrockSummarizationUsage };
-  } | undefined;
+  const metadata = response.response_metadata as
+    | {
+        usage?: BedrockSummarizationUsage;
+        metadata?: { usage?: BedrockSummarizationUsage };
+      }
+    | undefined;
   const raw = metadata?.metadata?.usage ?? metadata?.usage;
   if ('usage_metadata' in response && response.usage_metadata != null) {
     return normalizeBedrockInputUsage(
-      response.usage_metadata as Partial<UsageMetadata>, raw
+      response.usage_metadata as Partial<UsageMetadata>,
+      raw
     );
   }
   if (raw == null) return undefined;
@@ -54,31 +58,37 @@ export function readSummarizationUsage(
     total_tokens == null &&
     cache_read == null &&
     cache_creation == null
-  ) return undefined;
+  )
+    return undefined;
 
-  return normalizeBedrockInputUsage({
-    ...(input_tokens == null ? {} : { input_tokens }),
-    ...(output_tokens == null ? {} : { output_tokens }),
-    ...(total_tokens == null ? {} : { total_tokens }),
-    ...(cache_read == null && cache_creation == null
-      ? {}
-      : {
-        input_token_details: {
-          ...(cache_read == null ? {} : { cache_read }),
-          ...(cache_creation == null ? {} : { cache_creation }),
-        },
-      }),
-  }, raw);
+  return normalizeBedrockInputUsage(
+    {
+      ...(input_tokens == null ? {} : { input_tokens }),
+      ...(output_tokens == null ? {} : { output_tokens }),
+      ...(total_tokens == null ? {} : { total_tokens }),
+      ...(cache_read == null && cache_creation == null
+        ? {}
+        : {
+            input_token_details: {
+              ...(cache_read == null ? {} : { cache_read }),
+              ...(cache_creation == null ? {} : { cache_creation }),
+            },
+          }),
+    },
+    raw
+  );
 }
 
 export function buildSummarizationStepUsage(
   attempts: readonly SummarizationAttemptUsage[]
-): {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  attemptUsage?: readonly SummarizationAttemptUsage[];
-} | undefined {
+):
+  | {
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+      attemptUsage?: readonly SummarizationAttemptUsage[];
+    }
+  | undefined {
   if (attempts.length === 0) return undefined;
 
   let prompt_tokens = 0;

@@ -245,10 +245,10 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
     const toolConfig =
       this.promptCache === true && supportsBedrockToolCache(this.cacheModelId)
         ? insertBedrockToolCachePoint(
-          baseToolConfig,
-          true,
-          resolveBedrockPromptCacheTtl(this.promptCacheTtl, this.cacheModelId)
-        )
+            baseToolConfig,
+            true,
+            resolveBedrockPromptCacheTtl(this.promptCacheTtl, this.cacheModelId)
+          )
         : baseToolConfig;
 
     /** Service tier from options or fall back to class-level setting */
@@ -475,7 +475,7 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
       const enrichChunk = this.enrichChunk.bind(this);
       const source = (async function* (): AsyncGenerator<
         SmoothItem<BedrockEmittedChunk>
-        > {
+      > {
         let sawEvent = false;
         for await (const event of stream) {
           sawEvent = true;

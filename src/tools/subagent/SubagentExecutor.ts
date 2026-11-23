@@ -1582,17 +1582,17 @@ export class SubagentExecutor {
         this.humanInTheLoop?.enabled === true ||
         this.humanInTheLoop?.backgroundPausePolicy === 'deny'
           ? {
-            enabled: false,
-            backgroundPausePolicy: 'deny',
-            backgroundDeny: true,
-          }
+              enabled: false,
+              backgroundPausePolicy: 'deny',
+              backgroundDeny: true,
+            }
           : this.humanInTheLoop,
       maxDepth: this.maxDepth,
       createChildGraph:
         detachedGraphFactory == null
           ? this.createChildGraph
           : (input): StandardGraph =>
-            detachedGraphFactory({ kind: 'standard', input }),
+              detachedGraphFactory({ kind: 'standard', input }),
       createChildGraphByKind:
         detachedGraphFactory ?? this.createChildGraphByKind,
     });
@@ -2153,14 +2153,14 @@ export class SubagentExecutor {
             typeof value === 'object' &&
             'value' in value
               ? {
-                ...value,
-                value: rebindToolBatchReplayPayload(
-                  value.value,
-                  approvalScope.source,
-                  approvalScope.target,
-                  targetThreadId
-                ),
-              }
+                  ...value,
+                  value: rebindToolBatchReplayPayload(
+                    value.value,
+                    approvalScope.source,
+                    approvalScope.target,
+                    targetThreadId
+                  ),
+                }
               : value;
           writes.push([channel, reboundValue]);
         }
@@ -2233,27 +2233,27 @@ export class SubagentExecutor {
         ...(activeRun == null
           ? {}
           : {
-            pendingInterruptIds: [
-              ...new Set(
-                activeRun.pendingInterrupts.flatMap((pending) =>
-                  pending.id == null ? [] : [pending.id]
-                )
+              pendingInterruptIds: [
+                ...new Set(
+                  activeRun.pendingInterrupts.flatMap((pending) =>
+                    pending.id == null ? [] : [pending.id]
+                  )
+                ),
+              ],
+              pendingInterrupts: activeRun.pendingInterrupts.flatMap(
+                (pending) =>
+                  pending.id == null
+                    ? []
+                    : [
+                        {
+                          interruptId: pending.id,
+                          payload: cloneToolApprovalInterruptPayload(
+                            getPublicToolInterruptPayload(pending.value)
+                          ),
+                        },
+                      ]
               ),
-            ],
-            pendingInterrupts: activeRun.pendingInterrupts.flatMap(
-              (pending) =>
-                pending.id == null
-                  ? []
-                  : [
-                    {
-                      interruptId: pending.id,
-                      payload: cloneToolApprovalInterruptPayload(
-                        getPublicToolInterruptPayload(pending.value)
-                      ),
-                    },
-                  ]
-            ),
-          }),
+            }),
         ...(descendant == null ? {} : { descendant }),
       });
     }
@@ -2606,11 +2606,11 @@ export class SubagentExecutor {
       settled.resolvedArgs == null
         ? undefined
         : getHostArgsDigestFromArgs(
-          this.configs.get(
-            resolvedSubagentType ?? execution.binding?.subagentType ?? ''
-          ),
-          settled.resolvedArgs
-        );
+            this.configs.get(
+              resolvedSubagentType ?? execution.binding?.subagentType ?? ''
+            ),
+            settled.resolvedArgs
+          );
     if (
       boundInvocation != null &&
       settled.resolvedArgs != null &&
@@ -3116,9 +3116,9 @@ export class SubagentExecutor {
         this.subagentContext?.prepare == null
           ? undefined
           : await awaitWithAbort(
-            Promise.resolve(this.subagentContext.prepare(hostContextInput)),
-            childSignal
-          );
+              Promise.resolve(this.subagentContext.prepare(hostContextInput)),
+              childSignal
+            );
       execution.assertUsable(childSignal);
       for (const [agentId, sessions] of Object.entries(
         preparedContext?.agentSessions ?? {}
@@ -3209,12 +3209,12 @@ export class SubagentExecutor {
       ...(params.taskRuntime == null
         ? {}
         : {
-          preemption: {
-            shouldPreempt: (): boolean =>
-              params.taskRuntime?.shouldPreempt() === true,
-            maxSeals: MAX_BACKGROUND_SUBAGENT_SEALS,
-          },
-        }),
+            preemption: {
+              shouldPreempt: (): boolean =>
+                params.taskRuntime?.shouldPreempt() === true,
+              maxSeals: MAX_BACKGROUND_SUBAGENT_SEALS,
+            },
+          }),
     };
     let childGraph = cachedChildRun?.graph;
     if (childGraph == null && childPlan.kind === 'graph') {
@@ -3398,14 +3398,14 @@ export class SubagentExecutor {
             resumeExecution == null
               ? persistedInterrupts
               : persistedInterrupts.map((pending) => ({
-                ...pending,
-                value: rebindToolBatchReplayPayload(
-                  pending.value,
-                  resumeExecution.approvalExecutionScope,
-                  approvalExecutionScope,
-                  childThreadId
-                ),
-              }));
+                  ...pending,
+                  value: rebindToolBatchReplayPayload(
+                    pending.value,
+                    resumeExecution.approvalExecutionScope,
+                    approvalExecutionScope,
+                    childThreadId
+                  ),
+                }));
           execution.markStarted();
           childAlreadyStarted = true;
         } else if (persistedState.next.length > 0) {
@@ -3514,12 +3514,12 @@ export class SubagentExecutor {
             this.executions.remove(execution);
             return policyFailed
               ? createSubagentFailure(
-                'Subagent start policy could not be evaluated; background execution denied.'
-              )
+                  'Subagent start policy could not be evaluated; background execution denied.'
+                )
               : {
-                content: `Blocked: ${hookResult.reason ?? 'Blocked by hook'}`,
-                messages: [],
-              };
+                  content: `Blocked: ${hookResult.reason ?? 'Blocked by hook'}`,
+                  messages: [],
+                };
           }
         }
         execution.markStarted();
@@ -3979,11 +3979,11 @@ export class SubagentExecutor {
           graphMemberInputs == null
             ? (asNonEmptyString(metadata?.agentId) ?? getEventAgentId(data))
             : getGraphEventMemberAgentId({
-              data,
-              metadata,
-              memberInputs: graphMemberInputs,
-              memberAgentIdByStepId,
-            });
+                data,
+                metadata,
+                memberInputs: graphMemberInputs,
+                memberAgentIdByStepId,
+              });
         if (eventName === GraphEvents.ON_TOOL_EXECUTE) {
           const toolHandler = parentRegistry.getHandler(
             GraphEvents.ON_TOOL_EXECUTE

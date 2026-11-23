@@ -98,9 +98,28 @@ describe('boundSummarizationInput', () => {
   );
 
   it('omits only the retained tail when the complete compactable head fits', () => {
-    const messages = [new HumanMessage('old'), new AIMessage('old answer'), new HumanMessage('retained'), new AIMessage('retained answer')];
-    expect(boundSummarizationInput({...params, messages, budget: 20, requiredHeadLength: 2})).toEqual(messages.slice(0, 2));
-    expect(() => boundSummarizationInput({...params, messages, budget: 10, requiredHeadLength: 2})).toThrow(SummarizationInputTooLargeError);
+    const messages = [
+      new HumanMessage('old'),
+      new AIMessage('old answer'),
+      new HumanMessage('retained'),
+      new AIMessage('retained answer'),
+    ];
+    expect(
+      boundSummarizationInput({
+        ...params,
+        messages,
+        budget: 20,
+        requiredHeadLength: 2,
+      })
+    ).toEqual(messages.slice(0, 2));
+    expect(() =>
+      boundSummarizationInput({
+        ...params,
+        messages,
+        budget: 10,
+        requiredHeadLength: 2,
+      })
+    ).toThrow(SummarizationInputTooLargeError);
   });
 
   it('refuses to drop the newest indivisible user payload', () => {

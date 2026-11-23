@@ -660,12 +660,14 @@ function createAgentInputFromGraphConfig(
     ...(instructions != null && instructions !== ''
       ? { prompt: instructions }
       : {}),
-    ...(retainRecentTurns != null ? {
-      retainRecent: {
-        ...agent.summarizationConfig?.retainRecent,
-        turns: retainRecentTurns,
-      },
-    } : {}),
+    ...(retainRecentTurns != null
+      ? {
+          retainRecent: {
+            ...agent.summarizationConfig?.retainRecent,
+            turns: retainRecentTurns,
+          },
+        }
+      : {}),
   };
   return {
     ...applyInitialSummaryToAgent(agent, initialSummary),
@@ -977,10 +979,10 @@ export class AgentSession {
       params.runConfig.fadingTiers == null
         ? undefined
         : Object.fromEntries(
-          Object.entries(params.runConfig.fadingTiers).map(
-            ([agentId, tier]) => [agentId, { ...tier }]
-          )
-        );
+            Object.entries(params.runConfig.fadingTiers).map(
+              ([agentId, tier]) => [agentId, { ...tier }]
+            )
+          );
   }
 
   static async create(config: AgentSessionConfig): Promise<AgentSession> {
@@ -1124,10 +1126,10 @@ export class AgentSession {
         state.fadingTiers == null
           ? {}
           : Object.fromEntries(
-            Object.entries(state.fadingTiers).flatMap(([agentId, tier]) =>
-              isFadingTier(tier) ? [[agentId, { ...tier }] as const] : []
+              Object.entries(state.fadingTiers).flatMap(([agentId, tier]) =>
+                isFadingTier(tier) ? [[agentId, { ...tier }] as const] : []
+              )
             )
-          )
       );
     }
   }
@@ -1146,13 +1148,13 @@ export class AgentSession {
       ...(state.fadingTiers == null
         ? {}
         : {
-          fadingTiers: Object.fromEntries(
-            Object.entries(state.fadingTiers).map(([agentId, tier]) => [
-              agentId,
-              { ...tier },
-            ])
-          ),
-        }),
+            fadingTiers: Object.fromEntries(
+              Object.entries(state.fadingTiers).map(([agentId, tier]) => [
+                agentId,
+                { ...tier },
+              ])
+            ),
+          }),
     });
   }
 
@@ -1306,13 +1308,13 @@ export class AgentSession {
     const tuple =
       params.checkpointId != null && params.checkpointId !== ''
         ? await getSelectedCheckpointTuple(
-          this.checkpointing.checkpointer,
-          checkpointConfig
-        )
+            this.checkpointing.checkpointer,
+            checkpointConfig
+          )
         : await getLatestCheckpointTuple(
-          this.checkpointing.checkpointer,
-          params.config
-        );
+            this.checkpointing.checkpointer,
+            params.config
+          );
     if (!tuple) {
       return;
     }

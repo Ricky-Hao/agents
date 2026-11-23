@@ -126,29 +126,29 @@ async function createHarness(options: HarnessOptions): Promise<Harness> {
   const graphConfig: t.RunConfig['graphConfig'] =
     multi != null
       ? {
-        type: 'multi-agent',
-        agents: [
-          {
-            agentId: 'first',
-            ...plainAgent,
-            ...(multi.summarizer === 'first' ? agentFields : {}),
-          },
-          {
-            agentId: 'second',
-            ...plainAgent,
-            ...(multi.summarizer === 'second' ? agentFields : {}),
-          },
-        ],
-        edges:
+          type: 'multi-agent',
+          agents: [
+            {
+              agentId: 'first',
+              ...plainAgent,
+              ...(multi.summarizer === 'first' ? agentFields : {}),
+            },
+            {
+              agentId: 'second',
+              ...plainAgent,
+              ...(multi.summarizer === 'second' ? agentFields : {}),
+            },
+          ],
+          edges:
             multi.edgeType === 'direct'
               ? [{ from: ['first'], to: ['second'], edgeType: 'direct' }]
               : [{ from: 'first', to: 'second', edgeType: 'handoff' }],
-      }
+        }
       : {
-        type: 'standard',
-        llmConfig,
-        ...agentFields,
-      };
+          type: 'standard',
+          llmConfig,
+          ...agentFields,
+        };
   if (options.checkpointer != null) {
     graphConfig.compileOptions = { checkpointer: options.checkpointer };
   }

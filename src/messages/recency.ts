@@ -456,7 +456,7 @@ function inspectPairingBalancedWindow(
     }
   }
   while (starts[starts.length - 1] > newestExchangeStart) starts.pop();
-  return {starts, hasCompletedToolCalls};
+  return { starts, hasCompletedToolCalls };
 }
 
 /** Safe suffix starts that keep the newest exchange and its source lineage. */
@@ -473,12 +473,22 @@ function splitToolWindowAtRecencyBoundary(
 ): RecencySplit | undefined {
   const tokens = options.tokens ?? options.intraTurnTokens;
   const count = options.tokenCounter;
-  if (tokens == null || !Number.isFinite(tokens) || tokens <= 0 || count == null) return undefined;
-  const {starts, hasCompletedToolCalls} = inspectPairingBalancedWindow(messages, options.provider);
+  if (
+    tokens == null ||
+    !Number.isFinite(tokens) ||
+    tokens <= 0 ||
+    count == null
+  )
+    return undefined;
+  const { starts, hasCompletedToolCalls } = inspectPairingBalancedWindow(
+    messages,
+    options.provider
+  );
   if (!hasCompletedToolCalls) return undefined;
   const suffixTokens = new Array<number>(messages.length + 1);
   suffixTokens[messages.length] = 0;
-  for (let i = messages.length - 1; i >= 0; i--) suffixTokens[i] = suffixTokens[i + 1] + count(messages[i]);
+  for (let i = messages.length - 1; i >= 0; i--)
+    suffixTokens[i] = suffixTokens[i + 1] + count(messages[i]);
   let tailStartIndex = starts[starts.length - 1];
   for (const start of starts) {
     if (suffixTokens[start] <= tokens) {
@@ -487,7 +497,10 @@ function splitToolWindowAtRecencyBoundary(
     }
   }
   return {
-    head: messages.slice(0, tailStartIndex), tail: messages.slice(tailStartIndex),
-    tailStartIndex, tailTurnCount: 0, usedIntraTurnFallback: true,
+    head: messages.slice(0, tailStartIndex),
+    tail: messages.slice(tailStartIndex),
+    tailStartIndex,
+    tailTurnCount: 0,
+    usedIntraTurnFallback: true,
   };
 }

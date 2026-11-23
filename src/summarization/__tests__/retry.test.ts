@@ -649,12 +649,10 @@ describe('withSummarizationRetry', () => {
         controller.signal,
         'removeEventListener'
       );
-      const operation = jest
-        .fn()
-        .mockRejectedValue({
-          status: 429,
-          response: { headers: new Headers({ 'retry-after': '120' }) },
-        });
+      const operation = jest.fn().mockRejectedValue({
+        status: 429,
+        response: { headers: new Headers({ 'retry-after': '120' }) },
+      });
       const pending = withSummarizationRetry(operation, {
         signal: controller.signal,
       });

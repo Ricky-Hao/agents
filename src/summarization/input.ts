@@ -39,7 +39,11 @@ export function boundSummarizationInput({
     counts.set(message, tokens);
     return tokens;
   };
-  if (!Number.isSafeInteger(requiredHeadLength) || requiredHeadLength < 0 || requiredHeadLength > messages.length) {
+  if (
+    !Number.isSafeInteger(requiredHeadLength) ||
+    requiredHeadLength < 0 ||
+    requiredHeadLength > messages.length
+  ) {
     throw new SummarizationInputTooLargeError();
   }
   let total = 0;
@@ -68,10 +72,18 @@ export function boundSummarizationInput({
     }
   }
   const includesTail = minimumTokens <= budget;
-  if (!includesTail && requiredTokens > budget) throw new SummarizationInputTooLargeError();
+  if (!includesTail && requiredTokens > budget)
+    throw new SummarizationInputTooLargeError();
   const end = includesTail ? messages.length : requiredHeadLength;
-  const additionalTokens = budget - (includesTail ? minimumTokens : requiredTokens);
-  const maxChars = Math.max(0, Math.floor((additionalTokens * 2) / Math.max(1, includesTail ? toolCount : requiredToolCount)));
+  const additionalTokens =
+    budget - (includesTail ? minimumTokens : requiredTokens);
+  const maxChars = Math.max(
+    0,
+    Math.floor(
+      (additionalTokens * 2) /
+        Math.max(1, includesTail ? toolCount : requiredToolCount)
+    )
+  );
   for (const scale of [1, 0.5, 0.25, 0.125, 0]) {
     let tokens = 0;
     const candidate: BaseMessage[] = [];
@@ -81,10 +93,16 @@ export function boundSummarizationInput({
       if (original instanceof ToolMessage) {
         message = minimal[i];
         if (scale > 0) {
-          const result = compactToolContent(original.content, Math.floor(maxChars * scale));
+          const result = compactToolContent(
+            original.content,
+            Math.floor(maxChars * scale)
+          );
           if (!result.changed) message = original;
           else {
-            const compacted = cloneToolMessageWithContent(original, result.content);
+            const compacted = cloneToolMessageWithContent(
+              original,
+              result.content
+            );
             message = count(compacted) < count(original) ? compacted : original;
           }
         }

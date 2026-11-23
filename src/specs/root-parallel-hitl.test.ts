@@ -116,7 +116,15 @@ function harness(eventDriven: boolean, questionMember?: 'left' | 'right') {
       if (id !== questionMember && policy !== 'none')
         hooks.register('PreToolUse', {
           pattern: `${id}_tool`,
-          hooks: [async () => { reviews.push(id); return { decision: policy === 'ask' ? 'ask' as const : 'allow' as const }; }],
+          hooks: [
+            async () => {
+              reviews.push(id);
+              return {
+                decision:
+                  policy === 'ask' ? ('ask' as const) : ('allow' as const),
+              };
+            },
+          ],
         });
     const agents: t.AgentInputs[] = ['entry', 'left', 'right', 'result'].map(
       (id) => ({
@@ -173,31 +181,43 @@ function harness(eventDriven: boolean, questionMember?: 'left' | 'right') {
       },
       ...(eventDriven
         ? {
-          customHandlers: {
-            [GraphEvents.ON_TOOL_EXECUTE]: {
-              async handle(_event, data) {
-                const batch = data as t.ToolExecuteBatchRequest;
-                batch.resolve(
-                  await Promise.all(
-                    batch.toolCalls.map(async (call) => ({
-                      toolCallId: call.id,
-                      status: 'success' as const,
-                      content: await execute[
-                        batch.agentId === 'left' ? 'left' : 'right'
-                      ]({ value: String(call.args.value) }),
-                    }))
-                  )
-                );
+            customHandlers: {
+              [GraphEvents.ON_TOOL_EXECUTE]: {
+                async handle(_event, data) {
+                  const batch = data as t.ToolExecuteBatchRequest;
+                  batch.resolve(
+                    await Promise.all(
+                      batch.toolCalls.map(async (call) => ({
+                        toolCallId: call.id,
+                        status: 'success' as const,
+                        content: await execute[
+                          batch.agentId === 'left' ? 'left' : 'right'
+                        ]({ value: String(call.args.value) }),
+                      }))
+                    )
+                  );
+                },
               },
             },
-          },
-        }
+          }
         : {}),
     });
     run.Graph!.overrideModel = new RootApprovalModel(calls);
     return run;
   };
-  return { build, calls, reviews, left, right, leftEffect, rightEffect, setPolicy: (next: typeof policy) => { policy = next; }, protection };
+  return {
+    build,
+    calls,
+    reviews,
+    left,
+    right,
+    leftEffect,
+    rightEffect,
+    setPolicy: (next: typeof policy) => {
+      policy = next;
+    },
+    protection,
+  };
 }
 async function start(run: Run<t.IState>) {
   await run.processStream(
@@ -342,77 +362,178 @@ describe('root parallel HITL', () => {
 });
 
 describe('parallel approval resume authority', () => {
-  test.each([false, true].flatMap((eventDriven) => [false, true].flatMap((rebuilt) =>
-    ['resume', 'command'].flatMap((entrypoint) => ['left', 'both'].map((addressed) => ({ eventDriven, rebuilt, entrypoint, addressed })))
-  )))('rejects another principal before reusable hooks or effects: %j', async ({ eventDriven, rebuilt, entrypoint, addressed }) => {
-    const h = harness(eventDriven);
-    const run = await h.build();
-    await start(run);
-    const pending = run.getInterrupt()?.pendingInterrupts;
-    expect(pending).toHaveLength(2);
-    const decisions = Object.fromEntries((pending ?? []).filter((entry) => {
-      if (!isToolApprovalInterrupt(entry.payload)) throw new Error('Missing root approval');
-      return addressed === 'both' || entry.payload.action_requests[0].name === 'left_tool';
-    }).map((entry) => [entry.interruptId, [{ type: 'approve' }]]));
-    const resumed = rebuilt ? await h.build() : run;
-    const foreignConfig = { ...config, configurable: { ...config.configurable, user_id: 'other-user' } };
-    const reviews = h.reviews.length;
-    const resume = entrypoint === 'command'
-      ? resumed.processStream(new Command({ resume: decisions }), foreignConfig)
-      : resumed.resume(decisions, foreignConfig);
-    const failure = await resume.then(() => undefined, (error: Error) => error);
-    const errors = failure instanceof AggregateError ? failure.errors : [failure];
-    expect(errors.length).toBeGreaterThan(0);
-    for (const error of errors) expect(error instanceof Error && error.message.includes('execution owner changed')).toBe(true);
-    expect(h.reviews).toHaveLength(reviews);
-    expect(h.left).not.toHaveBeenCalled();
-    expect(h.right).not.toHaveBeenCalled();
-    expect(h.leftEffect).toHaveBeenCalledTimes(1);
-    expect(h.rightEffect).toHaveBeenCalledTimes(1);
-  });
-  test.each([false, true])('rejects an execution-scope change on a real pending root, eventDriven=%s', async (eventDriven) => {
-    const h = harness(eventDriven);
-    const run = await h.build();
-    await start(run);
-    const pending = run.getInterrupt()?.pendingInterrupts;
-    const decisions = Object.fromEntries((pending ?? []).map((entry) => [entry.interruptId, [{ type: 'approve' }]]));
-    const resumed = await h.build();
-    const failure = await resumed.resume(decisions, { ...config, configurable: { ...config.configurable, __librechat_tool_approval_execution_scope: 'other-scope' } })
-      .then(() => undefined, (error: Error) => error);
-    const errors = failure instanceof AggregateError ? failure.errors : [failure];
-    for (const error of errors) expect(error instanceof Error && error.message.includes('execution owner changed')).toBe(true);
-    expect(h.left).not.toHaveBeenCalled();
-    expect(h.right).not.toHaveBeenCalled();
-  });
-
-});
-
-describe('checkpoint-owned pending approval barrier', () => {
-  test.each([... [false, true].flatMap((eventDriven) => [false, true].flatMap((rebuilt) =>
-    ['resume', 'command'].flatMap((entrypoint) => ['left', 'right'].map((addressed) => ({ eventDriven, rebuilt, entrypoint, addressed, policy: 'allow', decision: 'approve' as const })))
-  )), ...[false, true].flatMap((eventDriven) => ['none', 'disabled'].map((policy) => ({ eventDriven, rebuilt: true, entrypoint: 'resume', addressed: 'left', policy, decision: 'approve' as const })))])(
-    'keeps unaddressed proposals pending across policy changes: %j', async ({ eventDriven, rebuilt, entrypoint, addressed, policy, decision }) => {
+  test.each(
+    [false, true].flatMap((eventDriven) =>
+      [false, true].flatMap((rebuilt) =>
+        ['resume', 'command'].flatMap((entrypoint) =>
+          ['left', 'both'].map((addressed) => ({
+            eventDriven,
+            rebuilt,
+            entrypoint,
+            addressed,
+          }))
+        )
+      )
+    )
+  )(
+    'rejects another principal before reusable hooks or effects: %j',
+    async ({ eventDriven, rebuilt, entrypoint, addressed }) => {
       const h = harness(eventDriven);
       const run = await h.build();
       await start(run);
       const pending = run.getInterrupt()?.pendingInterrupts;
       expect(pending).toHaveLength(2);
-      const selected = pending?.find((entry) => isToolApprovalInterrupt(entry.payload) && entry.payload.action_requests[0].name === `${addressed}_tool`);
+      const decisions = Object.fromEntries(
+        (pending ?? [])
+          .filter((entry) => {
+            if (!isToolApprovalInterrupt(entry.payload))
+              throw new Error('Missing root approval');
+            return (
+              addressed === 'both' ||
+              entry.payload.action_requests[0].name === 'left_tool'
+            );
+          })
+          .map((entry) => [entry.interruptId, [{ type: 'approve' }]])
+      );
+      const resumed = rebuilt ? await h.build() : run;
+      const foreignConfig = {
+        ...config,
+        configurable: { ...config.configurable, user_id: 'other-user' },
+      };
+      const reviews = h.reviews.length;
+      const resume =
+        entrypoint === 'command'
+          ? resumed.processStream(
+              new Command({ resume: decisions }),
+              foreignConfig
+            )
+          : resumed.resume(decisions, foreignConfig);
+      const failure = await resume.then(
+        () => undefined,
+        (error: Error) => error
+      );
+      const errors =
+        failure instanceof AggregateError ? failure.errors : [failure];
+      expect(errors.length).toBeGreaterThan(0);
+      for (const error of errors)
+        expect(
+          error instanceof Error &&
+            error.message.includes('execution owner changed')
+        ).toBe(true);
+      expect(h.reviews).toHaveLength(reviews);
+      expect(h.left).not.toHaveBeenCalled();
+      expect(h.right).not.toHaveBeenCalled();
+      expect(h.leftEffect).toHaveBeenCalledTimes(1);
+      expect(h.rightEffect).toHaveBeenCalledTimes(1);
+    }
+  );
+  test.each([false, true])(
+    'rejects an execution-scope change on a real pending root, eventDriven=%s',
+    async (eventDriven) => {
+      const h = harness(eventDriven);
+      const run = await h.build();
+      await start(run);
+      const pending = run.getInterrupt()?.pendingInterrupts;
+      const decisions = Object.fromEntries(
+        (pending ?? []).map((entry) => [
+          entry.interruptId,
+          [{ type: 'approve' }],
+        ])
+      );
+      const resumed = await h.build();
+      const failure = await resumed
+        .resume(decisions, {
+          ...config,
+          configurable: {
+            ...config.configurable,
+            __librechat_tool_approval_execution_scope: 'other-scope',
+          },
+        })
+        .then(
+          () => undefined,
+          (error: Error) => error
+        );
+      const errors =
+        failure instanceof AggregateError ? failure.errors : [failure];
+      for (const error of errors)
+        expect(
+          error instanceof Error &&
+            error.message.includes('execution owner changed')
+        ).toBe(true);
+      expect(h.left).not.toHaveBeenCalled();
+      expect(h.right).not.toHaveBeenCalled();
+    }
+  );
+});
+
+describe('checkpoint-owned pending approval barrier', () => {
+  test.each([
+    ...[false, true].flatMap((eventDriven) =>
+      [false, true].flatMap((rebuilt) =>
+        ['resume', 'command'].flatMap((entrypoint) =>
+          ['left', 'right'].map((addressed) => ({
+            eventDriven,
+            rebuilt,
+            entrypoint,
+            addressed,
+            policy: 'allow',
+            decision: 'approve' as const,
+          }))
+        )
+      )
+    ),
+    ...[false, true].flatMap((eventDriven) =>
+      ['none', 'disabled'].map((policy) => ({
+        eventDriven,
+        rebuilt: true,
+        entrypoint: 'resume',
+        addressed: 'left',
+        policy,
+        decision: 'approve' as const,
+      }))
+    ),
+  ])(
+    'keeps unaddressed proposals pending across policy changes: %j',
+    async ({
+      eventDriven,
+      rebuilt,
+      entrypoint,
+      addressed,
+      policy,
+      decision,
+    }) => {
+      const h = harness(eventDriven);
+      const run = await h.build();
+      await start(run);
+      const pending = run.getInterrupt()?.pendingInterrupts;
+      expect(pending).toHaveLength(2);
+      const selected = pending?.find(
+        (entry) =>
+          isToolApprovalInterrupt(entry.payload) &&
+          entry.payload.action_requests[0].name === `${addressed}_tool`
+      );
       const sibling = pending?.find((entry) => entry !== selected);
-      if (selected == null || sibling == null) throw new Error('Missing parallel approvals');
+      if (selected == null || sibling == null)
+        throw new Error('Missing parallel approvals');
       h.setPolicy(policy === 'none' ? 'none' : 'allow');
       if (policy === 'disabled') h.protection.enabled = false;
       const resumed = rebuilt ? await h.build() : run;
       const decisions = { [selected.interruptId]: [{ type: decision }] };
-      if (entrypoint === 'command') await resumed.processStream(new Command({ resume: decisions }), config);
+      if (entrypoint === 'command')
+        await resumed.processStream(new Command({ resume: decisions }), config);
       else await resumed.resume(decisions, config);
-      expect(h[addressed as 'left' | 'right']).toHaveBeenCalledTimes(policy === 'disabled' ? 0 : 1);
+      expect(h[addressed as 'left' | 'right']).toHaveBeenCalledTimes(
+        policy === 'disabled' ? 0 : 1
+      );
       const other = addressed === 'left' ? 'right' : 'left';
       expect(h[other].mock.calls.length).toBe(0);
       expect(resumed.getInterrupt()?.pendingInterrupts).toEqual([sibling]);
       h.protection.enabled = true;
       const finished = rebuilt ? await h.build() : resumed;
-      await finished.resume({ [sibling.interruptId]: [{ type: 'approve' }] }, config);
+      await finished.resume(
+        { [sibling.interruptId]: [{ type: 'approve' }] },
+        config
+      );
       expect(finished.getInterrupt()).toBeUndefined();
       expect(h[other]).toHaveBeenCalledTimes(1);
       expect(h.leftEffect).toHaveBeenCalledTimes(1);

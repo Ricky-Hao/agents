@@ -688,6 +688,8 @@ export type InjectedMessage = {
   source?: 'skill' | 'hook' | 'system' | 'steer';
   /** Only set when source is 'skill', for compaction preservation */
   skillName?: string;
+  skillId?: string;
+  skillVersion?: number;
 };
 
 /**
@@ -988,7 +990,8 @@ export type LocalExecutionConfig = {
    * Opt-in cap, in characters, on the results the model reads most:
    * `read_file` keeps whole lines up to the cap (and its `limit`, when
    * given) with an `offset` hint to continue, `grep_search` cuts long match lines and stops
-   * at the cap with a count of omitted lines, and `bash_tool` keeps the head
+   * at the cap with a count of omitted lines. Skipped-file notices keep their
+   * diagnostic label even when a long path is truncated. `bash_tool` keeps the head
    * and tail of long stdout and stderr with the status lines intact. Unset
    * keeps the existing limits.
    */

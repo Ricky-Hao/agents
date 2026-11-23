@@ -30,7 +30,7 @@ describe('AgentContext overflow recovery state', () => {
 
   it('tracks input-ceiling units after correction and restores configured units on reset', () => {
     const context = createContext(32_000);
-    context.summarizationConfig = {contextBudgetMode: 'window'};
+    context.summarizationConfig = { contextBudgetMode: 'window' };
     expect(context.summarizationBudgetMode).toBe('window');
     context.applyContextBudgetCorrection(26_600);
     expect(context.maxContextTokens).toBe(26_600);
@@ -43,7 +43,7 @@ describe('AgentContext overflow recovery state', () => {
 
   it('does not change budget units when an overflow supplies no numeric correction', () => {
     const context = createContext(32_000);
-    context.summarizationConfig = {contextBudgetMode: 'window'};
+    context.summarizationConfig = { contextBudgetMode: 'window' };
     context.applyContextBudgetCorrection(undefined);
     expect(context.summarizationBudgetMode).toBe('window');
     context.reset();

@@ -30,6 +30,13 @@ import {
   type ProgrammaticInvocationParams,
 } from './ProgrammaticCallerPolicy';
 import {
+  INTENT_PROPERTY,
+  PROGRAMMATIC_TOOL_INPUT,
+  PROGRAMMATIC_TOOL_CALL_ID,
+  inspectToolInputSchema,
+  stripIntentForInvoke,
+} from '@/tools/intentArg';
+import {
   clampCodeApiRunTimeoutMs,
   createCodeApiRunTimeoutSchema,
   resolveCodeApiRunTimeoutMs,
@@ -47,8 +54,9 @@ import {
   logCodeApiDiagnostic,
 } from '@/tools/diagnostics';
 import { appendExecutionArtifactFileSummary } from './CodeSessionFileSummary';
+import { CODE_INTERNAL_FILE_GUIDANCE } from '@/tools/codeGuidance';
+import { normalizeProgrammaticToolResponse } from './response';
 import { resolveFetchProxyAgent } from '@/utils/proxy';
-import { INTENT_PROPERTY } from '@/tools/intentArg';
 import { Constants } from '@/common';
 
 config();
@@ -57,8 +65,7 @@ config();
 const DEFAULT_MAX_ROUND_TRIPS = 20;
 
 const DEFAULT_RUN_TIMEOUT_MS = resolveCodeApiRunTimeoutMs();
-const CODE_API_PROGRAMMATIC_REQUEST_HEADER =
-  'X-LibreChat-Code-Request-ID';
+const CODE_API_PROGRAMMATIC_REQUEST_HEADER = 'X-LibreChat-Code-Request-ID';
 const CANCELLATION_REQUEST_TIMEOUT_MS = 2_000;
 
 // ============================================================================
@@ -78,6 +85,7 @@ const CORE_RULES = `Rules:
 - Tool results are decoded Python values (dict/list/str)
 - Only print() output returns to the model
 - ${CODE_ARTIFACT_PATH_GUIDANCE}
+- ${CODE_INTERNAL_FILE_GUIDANCE}
 - timeout caps one sandbox run/replay iteration, not the total multi-round-trip workflow`;
 
 const ADDITIONAL_RULES =
@@ -631,202 +639,14 @@ export function unwrapToolResponse(
   result: unknown,
   isMCPTool: boolean
 ): unknown {
-  // Only unwrap if this is an MCP tool and result is a tuple
-  if (!isMCPTool) {
-    return result;
-  }
-
-  /**
-   * Checks if a value is a content block object (has type and text).
-   */
-  const isContentBlock = (value: unknown): boolean => {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      return false;
-    }
-    const obj = value as Record<string, unknown>;
-    return typeof obj.type === 'string';
-  };
-
-  /**
-   * Checks if an array is an array of content blocks.
-   */
-  const isContentBlockArray = (arr: unknown[]): boolean => {
-    return arr.length > 0 && arr.every(isContentBlock);
-  };
-
-  /**
-   * Extracts text from a single content block object.
-   * Returns the text if it's a text block, otherwise returns null.
-   */
-  const extractTextFromBlock = (block: unknown): string | null => {
-    if (typeof block !== 'object' || block === null) return null;
-    const b = block as Record<string, unknown>;
-    if (b.type === 'text' && typeof b.text === 'string') {
-      return b.text;
-    }
-    return null;
-  };
-
-  /**
-   * Extracts text from content blocks (array or single object).
-   * Returns combined text or null if no text blocks found.
-   */
-  const extractTextFromContent = (content: unknown): string | null => {
-    // Single content block object: { type: 'text', text: '...' }
-    if (
-      typeof content === 'object' &&
-      content !== null &&
-      !Array.isArray(content)
-    ) {
-      const text = extractTextFromBlock(content);
-      if (text !== null) return text;
-    }
-
-    // Array of content blocks: [{ type: 'text', text: '...' }, ...]
-    if (Array.isArray(content) && content.length > 0) {
-      const texts = content
-        .map(extractTextFromBlock)
-        .filter((t): t is string => t !== null);
-      if (texts.length > 0) {
-        return texts.join('\n');
-      }
-    }
-
-    return null;
-  };
-
-  /**
-   * Tries to parse a string as JSON if it looks like JSON.
-   */
-  const maybeParseJSON = (str: string): unknown => {
-    const trimmed = str.trim();
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        return str;
-      }
-    }
-    return str;
-  };
-
-  // Handle array of content blocks at top level FIRST
-  // (before checking for tuple, since both are arrays)
-  if (Array.isArray(result) && isContentBlockArray(result)) {
-    const extractedText = extractTextFromContent(result);
-    if (extractedText !== null) {
-      return maybeParseJSON(extractedText);
-    }
-  }
-
-  // Check if result is a tuple/array with [content, artifacts]
-  if (Array.isArray(result) && result.length >= 1) {
-    const [content] = result;
-
-    // If first element is a string, return it (possibly parsed as JSON)
-    if (typeof content === 'string') {
-      return maybeParseJSON(content);
-    }
-
-    // Try to extract text from content blocks
-    const extractedText = extractTextFromContent(content);
-    if (extractedText !== null) {
-      return maybeParseJSON(extractedText);
-    }
-
-    // If first element is an object (but not a text block), return it
-    if (typeof content === 'object' && content !== null) {
-      return content;
-    }
-  }
-
-  // Handle single content block object at top level (not in tuple)
-  const extractedText = extractTextFromContent(result);
-  if (extractedText !== null) {
-    return maybeParseJSON(extractedText);
-  }
-
-  // Not a formatted response, return as-is
-  return result;
-}
-
-type ToolInputSchemaKind = {
-  object: boolean;
-  string: boolean;
-};
-
-function detectSchemaKind(schema: unknown): ToolInputSchemaKind {
-  const kind: ToolInputSchemaKind = { object: false, string: false };
-
-  if (schema == null || typeof schema !== 'object') {
-    return kind;
-  }
-
-  const jsonSchemaType = (schema as { type?: unknown }).type;
-  if (jsonSchemaType === 'object') {
-    kind.object = true;
-  } else if (jsonSchemaType === 'string') {
-    kind.string = true;
-  } else if (Array.isArray(jsonSchemaType)) {
-    kind.object = jsonSchemaType.includes('object');
-    kind.string = jsonSchemaType.includes('string');
-  }
-
-  const zodDef = (schema as { _def?: unknown })._def;
-  if (zodDef == null || typeof zodDef !== 'object') {
-    return kind;
-  }
-
-  const zodType = (zodDef as { type?: unknown; typeName?: unknown }).type;
-  const zodTypeName = (zodDef as { type?: unknown; typeName?: unknown })
-    .typeName;
-
-  if (zodType === 'object' || zodTypeName === 'ZodObject') {
-    kind.object = true;
-  } else if (zodType === 'string' || zodTypeName === 'ZodString') {
-    kind.string = true;
-  }
-
-  const innerSchema =
-    (
-      zodDef as {
-        innerType?: unknown;
-        schema?: unknown;
-        type?: unknown;
-      }
-    ).innerType ?? (zodDef as { schema?: unknown }).schema;
-  if (innerSchema != null) {
-    const innerKind = detectSchemaKind(innerSchema);
-    kind.object ||= innerKind.object;
-    kind.string ||= innerKind.string;
-  }
-
-  const options = (zodDef as { options?: unknown }).options;
-  if (Array.isArray(options)) {
-    for (const option of options) {
-      const optionKind = detectSchemaKind(option);
-      kind.object ||= optionKind.object;
-      kind.string ||= optionKind.string;
-    }
-  }
-
-  return kind;
-}
-
-function getToolInputSchemaKind(tool: t.GenericTool): ToolInputSchemaKind {
-  if (tool.constructor.name === 'DynamicTool') {
-    return { object: false, string: true };
-  }
-
-  const schema = (tool as { schema?: unknown }).schema;
-  return detectSchemaKind(schema);
+  return normalizeProgrammaticToolResponse(result, isMCPTool).result;
 }
 
 function normalizeToolInput(
   input: t.PTCToolCall['input'],
   tool: t.GenericTool
 ): t.PTCToolCall['input'] {
-  const schemaKind = getToolInputSchemaKind(tool);
+  const schemaKind = inspectToolInputSchema(tool);
 
   if (typeof input !== 'string') {
     if (!schemaKind.string || schemaKind.object) {
@@ -892,17 +712,24 @@ export async function executeTools(
     }
 
     try {
-      const result = await tool.invoke(normalizeToolInput(call.input, tool), {
+      const invokeConfig = {
         metadata: { [programmaticToolName]: true },
+      };
+      Object.defineProperty(invokeConfig, PROGRAMMATIC_TOOL_INPUT, {
+        value: call.input,
       });
+      Object.defineProperty(invokeConfig, PROGRAMMATIC_TOOL_CALL_ID, {
+        value: call.id,
+      });
+      const result = await tool.invoke(
+        stripIntentForInvoke(normalizeToolInput(call.input, tool), tool),
+        invokeConfig
+      );
 
       const isMCPTool = tool.mcp === true;
-      const unwrappedResult = unwrapToolResponse(result, isMCPTool);
-
       return {
         call_id: call.id,
-        result: unwrappedResult,
-        is_error: false,
+        ...normalizeProgrammaticToolResponse(result, isMCPTool),
       };
     } catch (error) {
       return {
@@ -978,9 +805,9 @@ export function formatCompletedResponse(
         : {}),
       ...(response.runtime_session_id != null
         ? {
-          runtime_session_id: response.runtime_session_id,
-          runtime_status: response.runtime_status,
-        }
+            runtime_session_id: response.runtime_session_id,
+            runtime_status: response.runtime_status,
+          }
         : {}),
     } satisfies t.ProgrammaticExecutionArtifact,
   ];

@@ -18,6 +18,7 @@ import {
   logCodeApiDiagnostic,
 } from '@/tools/diagnostics';
 import { appendCodeSessionFileSummary } from '@/tools/CodeSessionFileSummary';
+import { CODE_INTERNAL_FILE_GUIDANCE } from '@/tools/codeGuidance';
 import { resolveFetchProxyAgent } from '@/utils/proxy';
 import { INTENT_PROPERTY } from '@/tools/intentArg';
 import { EnvVar, Constants } from '@/common';
@@ -48,7 +49,7 @@ export const emptyOutputMessage =
   'stdout: Empty. Ensure you\'re writing output explicitly.\n';
 
 export const CODE_ARTIFACT_PATH_GUIDANCE =
-  'Anything a later call needs (data, helper scripts/modules, partial results) MUST be written under `/mnt/data` in the same call that produces it; `/tmp` never survives the call. `/mnt/data` keeps files with recognized extensions, covering common source, text, data, document, image, and archive formats (.py/.sh/.sql/.md/.json/.csv/.parquet/.png/.pdf/.zip and similar); extensionless or unusual extensions are not kept. Failed executions register nothing; fix the error and rerun before relying on new files.';
+  'Managed sandbox: `/mnt/data` files are retained across calls and automatically collected/displayed, not private scratch. Use it only for requested files, necessary deliverables, or unavoidable cross-call storage. Prefer memory or unique same-call /tmp scratch (mktemp), with cleanup. `/tmp` and other sandbox directories are not durable. Retention requires recognized extensions; never hide/rename files to evade collection. Failed executions register nothing; fix the error and rerun before relying on new files.';
 
 export const BASH_SHELL_GUIDANCE =
   'Bash: multi-line files use heredoc/printf; run Python via python3 -c/heredoc, not bare Python.';
@@ -57,7 +58,7 @@ const TMP_PATH_PATTERN = /(^|[^A-Za-z0-9_])\/tmp(?:\/|\b)/;
 const MNT_DATA_PATH_PATTERN = /(^|[^A-Za-z0-9_])\/mnt\/data(?:\/|\b)/;
 
 export const TMP_SCRATCH_OUTPUT_REMINDER =
-  'Note: /tmp files are same-call scratch only and were not persisted; use /mnt/data for files needed later.';
+  'Note: /tmp files are same-call scratch only and were not persisted. Prefer memory or one-call processing; follow the tool/environment storage rules for requested files, necessary deliverables or unavoidable cross-call needs. Artifact files are automatically collected/displayed, not private scratch.';
 
 export const FAILED_EXECUTION_FILE_REMINDER =
   'Note: any files written during this failed call were not registered for later calls; fix the error and rerun before relying on them.';
@@ -119,6 +120,7 @@ export const CodeExecutionToolSchema = {
 - The environment is stateless; variables and imports don't persist between executions.
 - Prior /mnt/data files are available and can be modified in place.
 - ${CODE_ARTIFACT_PATH_GUIDANCE}
+- ${CODE_INTERNAL_FILE_GUIDANCE}
 - Input code **IS ALREADY** displayed to the user, so **DO NOT** repeat it in your response unless asked.
 - Output code **IS NOT** displayed to the user, so **DO** write all desired output explicitly.
 - IMPORTANT: You MUST explicitly print/output ALL results you want the user to see.
@@ -468,7 +470,7 @@ Usage:
  * `df.head()` in the next, then hits a NameError it was told to treat as rare.
  */
 export const STATEFUL_ENV_NOTE =
-  'Session state: executions in this conversation run on the same warm machine, so files persist between calls — but each execution is a NEW process. Variables, imports, and in-memory data NEVER carry over: every call must re-import and rebuild the state it needs. Only /mnt/data is durable (the machine itself may also be reset at any time), so write anything that must survive there and read it back next call.';
+  'Session state: executions in this conversation run on the same warm machine, so files persist between calls — but each execution is a NEW process. Variables, imports, and in-memory data NEVER carry over: every call must re-import and rebuild the state it needs. Only /mnt/data is durable (the machine itself may also be reset at any time); it is also automatically collected/displayed, not private scratch.';
 
 export const StatefulCodeExecutionToolDescription = `
 Runs code and returns stdout/stderr output. Executions in this conversation share one warm machine with a persistent /mnt/data, but each execution runs as a separate process (not a notebook-style kernel).
@@ -493,7 +495,7 @@ export function buildCodeExecutionToolDescription(opts?: {
 const STATELESS_CODE_PARAM_NOTE =
   'The environment is stateless; variables and imports don\'t persist between executions.';
 const STATEFUL_CODE_PARAM_NOTE =
-  'Executions in this conversation share one warm machine, so files written to /mnt/data persist between calls. Each execution is a new process: variables and imports do NOT carry over — re-import and reload from /mnt/data every call.';
+  'Executions in this conversation share one warm machine, so files written to /mnt/data persist between calls. Each execution is a new process: variables and imports do NOT carry over — re-import and reload only the persisted files needed for this call.';
 
 export function buildCodeExecutionToolSchema(opts?: {
   statefulSessions?: boolean;

@@ -110,6 +110,11 @@ describe('hasMeaningfulReasoningPayload', () => {
   });
 });
 
-it.each(['', ' \n\t', 'meaningful reasoning'])('classifies string-form reasoning summaries: %j', summary => {
-  expect(hasMeaningfulReasoningPayload({type: 'reasoning.summary', summary})).toBe(summary.trim() !== '');
-});
+it.each(['', ' \n\t', 'meaningful reasoning'])(
+  'classifies string-form reasoning summaries: %j',
+  (summary) => {
+    expect(
+      hasMeaningfulReasoningPayload({ type: 'reasoning.summary', summary })
+    ).toBe(summary.trim() !== '');
+  }
+);

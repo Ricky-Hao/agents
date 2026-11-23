@@ -1,14 +1,14 @@
 import type * as t from '@/types';
 import {
-  createLocalBashProgrammaticToolCallingTool,
-  createLocalProgrammaticToolCallingTool,
-} from './LocalProgrammaticToolCalling';
-import {
   CLOUDFLARE_CODING_TOOL_NAMES,
   createCloudflareCodingToolBundle,
   createCloudflareCodingTools,
   createCloudflareExecutionTool,
 } from '@/tools/cloudflare';
+import {
+  createLocalBashProgrammaticToolCallingTool,
+  createLocalProgrammaticToolCallingTool,
+} from './LocalProgrammaticToolCalling';
 import {
   createLocalCodingToolBundle,
   createLocalCodingToolDefinitions,
@@ -224,16 +224,16 @@ function createLocalExecutionTool(
   config: t.LocalExecutionConfig
 ): t.GenericTool | undefined {
   switch (name) {
-  case Constants.EXECUTE_CODE:
-    return createLocalCodeExecutionTool(config);
-  case Constants.BASH_TOOL:
-    return createLocalBashExecutionTool({ config });
-  case Constants.PROGRAMMATIC_TOOL_CALLING:
-    return createLocalProgrammaticToolCallingTool(config);
-  case Constants.BASH_PROGRAMMATIC_TOOL_CALLING:
-    return createLocalBashProgrammaticToolCallingTool(config);
-  default:
-    return undefined;
+    case Constants.EXECUTE_CODE:
+      return createLocalCodeExecutionTool(config);
+    case Constants.BASH_TOOL:
+      return createLocalBashExecutionTool({ config });
+    case Constants.PROGRAMMATIC_TOOL_CALLING:
+      return createLocalProgrammaticToolCallingTool(config);
+    case Constants.BASH_PROGRAMMATIC_TOOL_CALLING:
+      return createLocalBashProgrammaticToolCallingTool(config);
+    default:
+      return undefined;
   }
 }
 
@@ -339,9 +339,10 @@ export function resolveLocalToolsForBinding(args: {
           cloudflareTool != null
       );
 
-    const resolvedTools = replacements.length === 0
-      ? args.tools
-      : mergeToolsByName(args.tools, replacements);
+    const resolvedTools =
+      replacements.length === 0
+        ? args.tools
+        : mergeToolsByName(args.tools, replacements);
     return filterToolsForDirectCaller(
       resolvedTools,
       args.toolRegistry,
@@ -376,9 +377,10 @@ export function resolveLocalToolsForBinding(args: {
     )
     .filter((localTool): localTool is t.GenericTool => localTool != null);
 
-  const resolvedTools = replacements.length === 0
-    ? args.tools
-    : mergeToolsByName(args.tools, replacements);
+  const resolvedTools =
+    replacements.length === 0
+      ? args.tools
+      : mergeToolsByName(args.tools, replacements);
   return filterToolsForDirectCaller(
     resolvedTools,
     args.toolRegistry,
@@ -397,8 +399,8 @@ export function resolveLocalToolRegistry(args: {
   const registry = new Map(args.toolRegistry ?? []);
   const selectedNames = shouldUseCloudflareSandboxExecution(args.toolExecution)
     ? getSelectedCloudflareCodingToolNames(
-      getCloudflareConfig(args.toolExecution)
-    )
+        getCloudflareConfig(args.toolExecution)
+      )
     : undefined;
   const localSelected =
     selectedNames == null
@@ -615,21 +617,13 @@ export function resolveLocalExecutionTools(args: {
       for (const localTool of bundle.tools) {
         toolMap.set(localTool.name, localTool);
         localImplementationNames.add(localTool.name);
-        addDirectToolName(
-          directToolNames,
-          localTool.name,
-          args.toolRegistry
-        );
+        addDirectToolName(directToolNames, localTool.name, args.toolRegistry);
       }
     } else {
       for (const localTool of createLocalCodingTools(localConfig)) {
         toolMap.set(localTool.name, localTool);
         localImplementationNames.add(localTool.name);
-        addDirectToolName(
-          directToolNames,
-          localTool.name,
-          args.toolRegistry
-        );
+        addDirectToolName(directToolNames, localTool.name, args.toolRegistry);
       }
     }
   }

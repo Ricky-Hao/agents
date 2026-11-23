@@ -34,6 +34,7 @@ import {
   LOCAL_CODING_BUNDLE_NAMES,
 } from '@/common';
 import {
+  getAssistantTextPhase,
   getMessageCreationContentMetadata,
   splitAssistantTextContentByPhase,
 } from '@/messages/assistantPhase';
@@ -63,6 +64,7 @@ import { resolveToolOutcome, outcomeFieldsFromResult } from '@/tools/intentArg';
 import { snapshotValidatedModelChunk } from '@/graphs/acceptedModelResponse';
 import { ProviderTextProtectionError } from '@/protection/providerText';
 import { TOOL_OUTPUT_REF_PATTERN } from '@/tools/toolOutputReferences';
+import { READ_IMAGE_TOOL } from '@/tools/imageRead';
 import { formatToolErrorContent } from '@/tools/toolErrorContent';
 import { PreparedSubagentError } from '@/tools/preparedSubagents';
 import { isReasoningContentBlock } from '@/messages/core';
@@ -725,11 +727,11 @@ function createEagerToolExecutionPlan(args: {
 
   const unstartedToolCalls = skipExisting
     ? toolCalls.filter((toolCall) => {
-      if (toolCall.id == null || toolCall.id === '') {
-        return true;
-      }
-      return !graph.eagerEventToolExecutions.has(toolCall.id);
-    })
+        if (toolCall.id == null || toolCall.id === '') {
+          return true;
+        }
+        return !graph.eagerEventToolExecutions.has(toolCall.id);
+      })
     : toolCalls;
   // Drop host-excluded tools only AFTER the batch-level guards above have run
   // against the full batch, so excluding a call never hides a sibling direct
@@ -1145,8 +1147,8 @@ function recordEagerToolCallChunks(args: {
     const existing =
       previous == null || shouldReset
         ? {
-          argsText: '',
-        }
+            argsText: '',
+          }
         : previous;
     const id = incomingId ?? existing.id;
     const name = incomingName ?? existing.name;
@@ -1434,6 +1436,30 @@ function startPreparedSubagents(
   }
 }
 
+function getReasoningSummaryText(
+  reasoning: ReasoningSummaryLike | undefined
+): string | undefined {
+  const summary = reasoning?.summary;
+  if (!Array.isArray(summary)) return undefined;
+  let text = '';
+  for (const part of summary) {
+    if (typeof part.text === 'string') text += part.text;
+  }
+  return text || undefined;
+}
+
+/** additional_kwargs 是 provider 边界上的未定型数据。 */
+function getReasoningContent(
+  reasoning: unknown
+): string | t.MessageContentComplex[] | undefined {
+  if (typeof reasoning === 'string' || Array.isArray(reasoning)) {
+    return reasoning.length > 0 ? reasoning : undefined;
+  }
+  if (reasoning == null || typeof reasoning !== 'object') return undefined;
+  // Responses 的 reasoning 对象只公开 summary 文本，不公开其他元数据。
+  return getReasoningSummaryText(reasoning as ReasoningSummaryLike);
+}
+
 export function getChunkContent({
   chunk,
   provider,
@@ -1451,55 +1477,29 @@ export function getChunkContent({
     return chunk.content;
   }
 
-  if (
-    (provider === Providers.OPENAI || provider === Providers.AZURE) &&
-    (
-      chunk?.additional_kwargs?.reasoning as
-        | Partial<ChatOpenAIReasoningSummary>
-        | undefined
-    )?.summary?.[0]?.text != null &&
-    ((
-      chunk?.additional_kwargs?.reasoning as
-        | Partial<ChatOpenAIReasoningSummary>
-        | undefined
-    )?.summary?.[0]?.text?.length ?? 0) > 0
-  ) {
-    return (
-      chunk?.additional_kwargs?.reasoning as
-        | Partial<ChatOpenAIReasoningSummary>
-        | undefined
-    )?.summary?.[0]?.text;
+  if (provider === Providers.OPENAI || provider === Providers.AZURE) {
+    const summaryText = getReasoningSummaryText(
+      chunk?.additional_kwargs?.reasoning as ReasoningSummaryLike | undefined
+    );
+    if (summaryText != null) return summaryText;
   }
-  if (provider === Providers.OPENROUTER) {
-    // Content presence signals end of reasoning phase - prefer content over reasoning
-    // This handles transitional chunks that may have both reasoning and content
-    if (typeof chunk?.content === 'string' && chunk.content !== '') {
-      return chunk.content;
-    }
-    const reasoning = chunk?.additional_kwargs?.reasoning as string | undefined;
-    if (reasoning != null && reasoning !== '') {
-      return reasoning;
-    }
-    const reasoningContent = chunk?.additional_kwargs?.reasoning_content as
-      | string
-      | undefined;
-    if (reasoningContent != null && reasoningContent !== '') {
-      return reasoningContent;
-    }
-    return chunk?.content;
-  }
-  const keyedReasoning = chunk?.additional_kwargs?.[reasoningKey] as
-    | string
-    | undefined;
-  if (
-    typeof chunk?.content === 'string' &&
-    chunk.content !== '' &&
-    keyedReasoning != null &&
-    keyedReasoning !== ''
-  ) {
+
+  // 正文出现时沿用原优先级；空 reasoning 不能遮蔽同一 chunk 的正文。
+  if (typeof chunk?.content === 'string' && chunk.content !== '') {
     return chunk.content;
   }
-  return ((keyedReasoning as string | undefined) ?? '') || chunk?.content;
+
+  if (provider === Providers.OPENROUTER) {
+    return (
+      getReasoningContent(chunk?.additional_kwargs?.reasoning) ??
+      getReasoningContent(chunk?.additional_kwargs?.reasoning_content) ??
+      chunk?.content
+    );
+  }
+  return (
+    getReasoningContent(chunk?.additional_kwargs?.[reasoningKey]) ??
+    chunk?.content
+  );
 }
 
 function isDisableStreamingEnabled(
@@ -1842,6 +1842,7 @@ export class ChatModelStreamHandler implements t.EventHandler {
     }
     this.handleReasoning(chunk, agentContext);
     const stepKey = graph.getStepKey(metadata);
+    const imageRead = 'imageRead' in graph ? graph.imageRead : undefined;
     let hasToolCalls = false;
     const hasToolCallChunks =
       (chunk.tool_call_chunks && chunk.tool_call_chunks.length > 0) ?? false;
@@ -1874,7 +1875,12 @@ export class ChatModelStreamHandler implements t.EventHandler {
       )
     ) {
       hasToolCalls = true;
-      await handleToolCalls(chunk.tool_calls, metadata, graph);
+      const visibleCalls = imageRead?.checkpointed
+        ? chunk.tool_calls.map((call) =>
+            call.name === READ_IMAGE_TOOL ? { ...call, args: {} } : call
+          )
+        : chunk.tool_calls;
+      await handleToolCalls(visibleCalls, metadata, graph);
       if (runScopeInvalidated()) {
         return;
       }
@@ -1959,7 +1965,9 @@ export class ChatModelStreamHandler implements t.EventHandler {
       await handleToolCallChunks({
         graph,
         stepKey,
-        toolCallChunks: chunk.tool_call_chunks,
+        toolCallChunks: imageRead?.checkpointed
+          ? imageRead.redactStreamedReadArgs(stepKey, chunk.tool_call_chunks)
+          : chunk.tool_call_chunks,
         metadata,
         observedAt,
       });
@@ -2228,8 +2236,7 @@ hasToolCallChunks: ${hasToolCallChunks}
         agentContext.provider === Providers.AZURE) &&
       reasoning_content != null &&
       typeof reasoning_content !== 'string' &&
-      reasoning_content.summary?.[0]?.text != null &&
-      reasoning_content.summary[0].text
+      hasReasoningContent(reasoning_content)
     ) {
       reasoning_content = 'valid';
     } else if (
@@ -2307,6 +2314,7 @@ export function createContentAggregator(): t.ContentAggregatorResult {
 
   const contentParts: Array<t.MessageContentComplex | undefined> = [];
   const stepMap = new Map<string, t.RunStep>();
+  const textStepIndex = new Map<string, number>();
   const toolCallContentIndexMap = new Map<string, number>();
   const sourceContentIndexMap = new Map<number, number>();
   const toolStepContentMap = new Map<string, ToolStepContentState>();
@@ -2316,7 +2324,11 @@ export function createContentAggregator(): t.ContentAggregatorResult {
   // Track agentId and groupId for each content index (applied to content parts)
   const contentMetaMap = new Map<
     number,
-    { agentId?: string; groupId?: number }
+    {
+      agentId?: string;
+      groupId?: number;
+      phase?: t.MessageContentComplex['phase'];
+    }
   >();
   /** A delta's content may carry several parts (e.g. Google server-side tool
    *  chunks emit multiple reasoning entries at once); every entry must reach
@@ -2433,12 +2445,17 @@ export function createContentAggregator(): t.ContentAggregatorResult {
     return contentIndex;
   };
   const setContentMeta = (index: number, runStep: t.RunStep): void => {
+    const phase =
+      runStep.stepDetails.type === StepTypes.MESSAGE_CREATION
+        ? runStep.stepDetails.message_creation.phase
+        : undefined;
     const hasAgentId = runStep.agentId != null && runStep.agentId !== '';
     const hasGroupId = runStep.groupId != null;
-    if (!hasAgentId && !hasGroupId) {
+    if (!hasAgentId && !hasGroupId && phase == null) {
       return;
     }
     const existingMeta = contentMetaMap.get(index) ?? {};
+    if (phase != null) existingMeta.phase = phase;
     if (hasAgentId) {
       existingMeta.agentId = runStep.agentId;
     }
@@ -2453,6 +2470,13 @@ export function createContentAggregator(): t.ContentAggregatorResult {
       return;
     }
     const meta = contentMetaMap.get(index);
+    if (
+      meta?.phase != null &&
+      contentPart.type === ContentTypes.TEXT &&
+      getAssistantTextPhase(contentPart) == null
+    ) {
+      contentPart.phase = meta.phase;
+    }
     if (meta?.agentId != null) {
       contentPart.agentId = meta.agentId;
     }
@@ -2467,7 +2491,7 @@ export function createContentAggregator(): t.ContentAggregatorResult {
     finalUpdate = false
   ): void => {
     if (!contentPart) {
-      console.warn('No content part found in \'updateContent\'');
+      console.warn("No content part found in 'updateContent'");
       return;
     }
     const partType = contentPart.type ?? '';
@@ -2500,13 +2524,18 @@ export function createContentAggregator(): t.ContentAggregatorResult {
 
     if (
       partType.startsWith(ContentTypes.TEXT) &&
-      (incomingText !== undefined || incomingCitations !== undefined)
+      (incomingText !== undefined ||
+        incomingCitations !== undefined ||
+        getAssistantTextPhase(contentPart) != null)
     ) {
-      // TODO: update this!!
       const currentContent = contentParts[index] as t.MessageDeltaUpdate;
+      const phase =
+        getAssistantTextPhase(contentPart) ??
+        getAssistantTextPhase(currentContent);
       const update: t.MessageDeltaUpdate = {
         type: ContentTypes.TEXT,
         text: (currentContent.text || '') + (incomingText ?? ''),
+        ...(phase == null ? {} : { phase }),
       };
 
       if (contentPart.tool_call_ids) {
@@ -2700,6 +2729,18 @@ export function createContentAggregator(): t.ContentAggregatorResult {
 
     if (event === GraphEvents.ON_SUMMARIZE_COMPLETE) {
       const completeData = data as t.SummarizeCompleteEvent;
+      if (completeData.error != null) {
+        const step = stepMap.get(completeData.id);
+        if (step != null) {
+          contentParts[step.index] = {
+            type: ContentTypes.SUMMARY,
+            outcome: 'failed',
+            failed: true,
+            content: [],
+          };
+        }
+        return;
+      }
       const summary = completeData.summary;
       if (!summary?.boundary) {
         return;
@@ -2793,7 +2834,20 @@ export function createContentAggregator(): t.ContentAggregatorResult {
       for (const contentPart of getDeltaContentParts(
         messageDelta.delta.content
       )) {
-        updateContent(runStep.index, contentPart);
+        let index = textStepIndex.get(runStep.id) ?? runStep.index;
+        const phase = getAssistantTextPhase(contentPart);
+        const previousPhase =
+          contentParts[index] == null
+            ? undefined
+            : getAssistantTextPhase(contentParts[index]!);
+        if (phase != null && previousPhase != null && phase !== previousPhase) {
+          index = allocateContentIndex();
+          setContentMeta(index, runStep);
+          const meta = contentMetaMap.get(index) ?? {};
+          contentMetaMap.set(index, { ...meta, phase });
+        }
+        textStepIndex.set(runStep.id, index);
+        updateContent(index, contentPart);
       }
     } else if (
       event === GraphEvents.ON_AGENT_UPDATE &&

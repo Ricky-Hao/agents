@@ -85,6 +85,7 @@ import { getProviderFamily } from '@/llm/providerRegistry';
 import { getProviderStopReasons } from '@/llm/truncation';
 import { isProviderCancellation } from '@/utils/errors';
 import { isReasoningModel } from '@/llm/openai/utils';
+import { getChunkContent } from '@/stream';
 import { initializeModel } from '@/llm/init';
 import { executeHooks } from '@/hooks';
 
@@ -601,9 +602,9 @@ async function prepareSummarizationBudget({
     overhead = usesAgentCounter
       ? agentContext.instructionTokens
       : (await system.invoke([], config)).reduce(
-        (total, message) => total + count(message),
-        overhead
-      );
+          (total, message) => total + count(message),
+          overhead
+        );
   }
   const ratio = usesAgentCounter
     ? Math.max(1, agentContext.calibrationRatio)
@@ -616,40 +617,65 @@ async function prepareSummarizationBudget({
     maxContextTokens == null
       ? Number.MAX_SAFE_INTEGER
       : Math.floor(
-        (maxContextTokens -
+          (maxContextTokens -
             overhead -
             outputReserve -
             count(new HumanMessage(instruction))) /
             ratio
-      );
+        );
   return { count, system, budget };
 }
 
 /**
- * What one summarization round has streamed. Deltas go out as the provider
- * produces them, so an attempt that is then abandoned has already published
- * text that is not the summary. `abandon` marks that text stale: the next delta
- * to go out says to replace it, and `retract` withdraws it when none follows.
+ * Owns the deltas for one summarization round. With live streaming, `abandon`
+ * marks published text stale and `retract` withdraws it if nothing replaces it.
+ * The append-only consumer receives buffered deltas after a successful attempt.
  */
 export type SummaryDeltaStream = {
-  /** Call once per outgoing delta; true when it must replace what was streamed. */
-  next(): boolean;
+  buffered: boolean;
+  emit(event: t.SummarizeDeltaEvent, config: RunnableConfig): Promise<void> | void;
   abandon(): void;
+  flush(config?: RunnableConfig): Promise<void>;
   retract(config?: RunnableConfig): Promise<void>;
 };
 
-export function createSummaryDeltaStream(stepId?: string): SummaryDeltaStream {
+export function createSummaryDeltaStream(
+  stepId?: string,
+  buffered = false
+): SummaryDeltaStream {
+  const pending: t.SummarizeDeltaEvent[] = [];
   let streamed = false;
   let stale = false;
   return {
-    next(): boolean {
-      const reset = stale;
+    buffered,
+    emit(event, config): Promise<void> | void {
+      if (buffered) {
+        pending.push(event);
+        return;
+      }
+      if (stale) event.reset = true;
       stale = false;
       streamed = true;
-      return reset;
+      return safeDispatchCustomEvent(
+        GraphEvents.ON_SUMMARIZE_DELTA,
+        event,
+        config
+      ).then(() => undefined);
     },
     abandon(): void {
+      pending.length = 0;
       stale = streamed;
+    },
+    async flush(config?: RunnableConfig): Promise<void> {
+      if (config == null) return;
+      for (const event of pending) {
+        await safeDispatchCustomEvent(
+          GraphEvents.ON_SUMMARIZE_DELTA,
+          event,
+          config
+        );
+      }
+      pending.length = 0;
     },
     async retract(config?: RunnableConfig): Promise<void> {
       if (!stale || stepId == null || stepId === '' || config == null) {
@@ -773,6 +799,7 @@ function buildSummaryBlock(params: {
 }): t.SummaryContentBlock {
   return {
     type: ContentTypes.SUMMARY,
+    outcome: 'success',
     content: [
       {
         type: ContentTypes.TEXT,
@@ -915,10 +942,6 @@ function describeFallbackError(
 }
 
 /**
- * Runs the summarization LLM call with primary + fallback providers,
- * preserving history when every provider fails.
- */
-/**
  * Runs the round and settles what it streamed: when the round ends without a
  * summary, or with one that came from an attempt that did not stream, the text
  * an earlier attempt published is withdrawn before the result is reported.
@@ -926,11 +949,16 @@ function describeFallbackError(
 async function executeSummarizationWithFallback(
   params: Parameters<typeof runSummarizationAttempts>[0]
 ): ReturnType<typeof runSummarizationAttempts> {
-  const deltas = createSummaryDeltaStream(params.stepId);
+  const deltas = createSummaryDeltaStream(
+    params.stepId,
+    params.agentContext.summarizationConfig?.streamDeltas !== true
+  );
   try {
     const result = await runSummarizationAttempts(params, deltas);
     if (result.text === '') {
       deltas.abandon();
+    } else {
+      await deltas.flush(params.summarizeConfig);
     }
     return result;
   } catch (error) {
@@ -1005,7 +1033,7 @@ async function runSummarizationAttempts(
       ? (graph?.getToolsForBinding?.(
           clientConfig.provider as t.ProviderName,
           clientConfig.clientOptions as t.ClientOptions
-      ) ??
+        ) ??
         prepareToolsForPromptCache({
           provider: clientConfig.provider as t.ProviderName,
           clientOptions: clientConfig.clientOptions as t.ClientOptions,
@@ -1063,7 +1091,7 @@ async function runSummarizationAttempts(
                   clientConfig.clientOptions as {
                     promptCacheTtl?: PromptCacheTtl;
                   }
-              ).promptCacheTtl
+                ).promptCacheTtl
               : undefined,
           bedrockModelId:
             clientConfig.provider === Providers.BEDROCK
@@ -1074,7 +1102,7 @@ async function runSummarizationAttempts(
                         model?: string;
                       }
                     | undefined
-              )
+                )
               : undefined,
           log,
         }),
@@ -1167,6 +1195,7 @@ async function runSummarizationAttempts(
           stepId,
           config: traceConfig(summarizeConfig, 'cache_hit_compaction'),
           provider: clientConfig.provider,
+          reasoningKey: agentContext.reasoningKey,
           graph,
         });
         const fallbackTools = agentContext.getToolsForBinding();
@@ -1220,12 +1249,12 @@ async function runSummarizationAttempts(
             const windowWithCache =
               provider === Providers.BEDROCK
                 ? applySummarizationHistoryCache({
-                  messages: bounded,
-                  provider,
-                  enabled: bedrock?.promptCache === true,
-                  promptCacheTtl: bedrock?.promptCacheTtl,
-                  bedrockModelId: resolveClientOptionsModel(clientOptions),
-                })
+                    messages: bounded,
+                    provider,
+                    enabled: bedrock?.promptCache === true,
+                    promptCacheTtl: bedrock?.promptCacheTtl,
+                    bedrockModelId: resolveClientOptionsModel(clientOptions),
+                  })
                 : bounded;
             const history =
               system == null
@@ -1584,13 +1613,13 @@ export function createSummarizeNode({
       entryBreakerSignal == null
         ? adapterGraph
         : (Object.create(adapterGraph, {
-          getBreakerSignal: { value: (): AbortSignal => entryBreakerSignal },
-          ...(entryBreakerController != null && {
-            getBreakerController: {
-              value: (): AbortController => entryBreakerController,
-            },
-          }),
-        }) as typeof adapterGraph);
+            getBreakerSignal: { value: (): AbortSignal => entryBreakerSignal },
+            ...(entryBreakerController != null && {
+              getBreakerController: {
+                value: (): AbortController => entryBreakerController,
+              },
+            }),
+          }) as typeof adapterGraph);
     const request = state.summarizationRequest;
     if (request == null) {
       return { summarizationRequest: undefined };
@@ -1711,12 +1740,12 @@ export function createSummarizeNode({
       retainRecent?.tokens ??
       (retainRecent == null
         ? Math.min(
-          DEFAULT_RETAIN_RECENT_TOKENS,
-          Math.max(
-            1,
-            Math.floor((agentContext.maxContextTokens ?? 100_000) * 0.16)
+            DEFAULT_RETAIN_RECENT_TOKENS,
+            Math.max(
+              1,
+              Math.floor((agentContext.maxContextTokens ?? 100_000) * 0.16)
+            )
           )
-        )
         : undefined);
     const { head: compactableHead, tail: projectedTail } =
       splitAtRecencyBoundary(windowMessages, {
@@ -1876,22 +1905,22 @@ export function createSummarizeNode({
 
     const summarizeConfig: RunnableConfig | undefined = config
       ? {
-        ...config,
-        metadata: {
-          ...config.metadata,
-          agent_id: request.agentId,
-          /** Canonical agent-identity key, overwritten by every component
+          ...config,
+          metadata: {
+            ...config.metadata,
+            agent_id: request.agentId,
+            /** Canonical agent-identity key, overwritten by every component
              *  that stamps identity (graph model path, ToolNode, here) so the
              *  closest stamper always wins via spread order — Langfuse scope
              *  trust relies on it (see `isForeignScope`). */
-          agentId: request.agentId,
-          summarization_provider: clientConfig.provider,
-          summarization_model: clientConfig.modelName,
-          compaction_semantic_index_entries: semanticIndex.entryCount,
-          compaction_semantic_index_chars: semanticIndex.charCount,
-          compaction_semantic_index_omitted_entries:
+            agentId: request.agentId,
+            summarization_provider: clientConfig.provider,
+            summarization_model: clientConfig.modelName,
+            compaction_semantic_index_entries: semanticIndex.entryCount,
+            compaction_semantic_index_chars: semanticIndex.charCount,
+            compaction_semantic_index_omitted_entries:
               semanticIndex.omittedEntryCount,
-          /**
+            /**
              * Per-call model attribution for usage consumers (the subagent
              * usage-capture handler): the summarizer's model can differ from
              * the agent's primary, and providers that emit no `ls_model_name`
@@ -1901,18 +1930,18 @@ export function createSummarizeNode({
              * overrides this per fallback attempt; `INVOKED_PROVIDER` is
              * stamped by `attemptInvoke` itself.
              */
-          ...(clientConfig.modelName != null && clientConfig.modelName !== ''
-            ? { [Constants.INVOKED_MODEL]: clientConfig.modelName }
-            : {}),
-          /** Entry-captured breaker epoch: the wire consumer epoch-gates
+            ...(clientConfig.modelName != null && clientConfig.modelName !== ''
+              ? { [Constants.INVOKED_MODEL]: clientConfig.modelName }
+              : {}),
+            /** Entry-captured breaker epoch: the wire consumer epoch-gates
              * old-run summary chunks exactly like model-attempt chunks —
              * without the stamp, a straggling summary from a failed run
              * reads as current and could abort the next run's controller. */
-          ...(entryBreakerEpoch != null
-            ? { [STREAM_LIMIT_EPOCH_KEY]: entryBreakerEpoch }
-            : {}),
-        },
-      }
+            ...(entryBreakerEpoch != null
+              ? { [STREAM_LIMIT_EPOCH_KEY]: entryBreakerEpoch }
+              : {}),
+          },
+        }
       : undefined;
 
     /** Rechecked after the pre-call awaits (dispatchRunStep,
@@ -1998,7 +2027,7 @@ export function createSummarizeNode({
       return { summarizationRequest: undefined };
     }
 
-    if (!rawText) {
+    if (!rawText.trim() || summarizeConfig?.signal?.aborted === true) {
       /**
        * An empty summary compacts nothing, so the state the pruner sees next
        * is byte-identical to the one that just triggered. Resetting the guard
@@ -2069,11 +2098,11 @@ export function createSummarizeNode({
       summaryVersion: agentContext.summaryVersion,
       ...(summaryUsage != null
         ? {
-          input_tokens: summaryUsage.input_tokens,
-          output_tokens: summaryUsage.output_tokens,
-          cache_read: summaryUsage.input_token_details?.cache_read,
-          cache_creation: summaryUsage.input_token_details?.cache_creation,
-        }
+            input_tokens: summaryUsage.input_tokens,
+            output_tokens: summaryUsage.output_tokens,
+            cache_read: summaryUsage.input_token_details?.cache_read,
+            cache_creation: summaryUsage.input_token_details?.cache_creation,
+          }
         : {}),
     });
 
@@ -2251,21 +2280,21 @@ function isReasoningOnlySummary(response: BaseMessage): boolean {
 }
 
 /**
- * Creates an `onChunk` callback that dispatches each chunk as an
- * `ON_SUMMARIZE_DELTA` while the provider is still responding. With `deltas`,
- * a chunk from a new attempt replaces what an earlier attempt streamed.
+ * Creates an `onChunk` callback for `ON_SUMMARIZE_DELTA`. Buffered rounds
+ * keep display reasoning for append-only consumers after the attempt succeeds.
  */
 export function createSummarizationChunkHandler({
   stepId,
   config,
   provider,
+  reasoningKey,
   graph,
   deltas,
 }: {
   stepId?: string;
   config?: RunnableConfig;
   provider?: t.ProviderName;
-  /** @deprecated Not read: a delta carries summary text, never reasoning. */
+  /** Provider field used for display reasoning in buffered deltas. */
   reasoningKey?: 'reasoning_content' | 'reasoning';
   graph?: StreamLimitState & { getBreakerController?: () => AbortController };
   deltas?: SummaryDeltaStream;
@@ -2274,6 +2303,7 @@ export function createSummarizationChunkHandler({
     return undefined;
   }
   const limitMetadata = config.metadata as Record<string, unknown> | undefined;
+  const includeReasoning = deltas?.buffered ?? (reasoningKey != null);
   let streamingAttempt: unknown;
   return (chunk, attemptMetadata) => {
     if (
@@ -2326,22 +2356,23 @@ export function createSummarizationChunkHandler({
       (attemptMetadata?.[Constants.INVOKED_PROVIDER] as
         | t.ProviderName
         | undefined) ?? provider;
-    /**
-     * Summary text only. A chunk of reasoning is not part of the summary, and
-     * a response that turns out to be nothing but reasoning is retried, so
-     * publishing it here would show the model's thinking as the summary.
-     */
-    const text = collectText(chunk.content, CHUNK_TEXT_TYPES);
-    if (text === '') {
+    const content = includeReasoning
+      ? getChunkContent({
+          chunk: chunk as Parameters<typeof getChunkContent>[0]['chunk'],
+          provider: servingProvider,
+          reasoningKey: reasoningKey ?? 'reasoning_content',
+        })
+      : collectText(chunk.content, CHUNK_TEXT_TYPES);
+    if (content == null || content.length === 0) {
       return;
     }
-    const contentBlocks: t.MessageContentComplex[] = [
-      { type: ContentTypes.TEXT, text } as t.MessageContentComplex,
-    ];
+    const contentBlocks: t.MessageContentComplex[] =
+      typeof content === 'string'
+        ? [{ type: ContentTypes.TEXT, text: content }]
+        : content;
 
     const event: t.SummarizeDeltaEvent = {
       id: stepId,
-      ...(deltas?.next() === true ? { reset: true } : {}),
       delta: {
         summary: {
           type: ContentTypes.SUMMARY,
@@ -2357,7 +2388,9 @@ export function createSummarizationChunkHandler({
         },
       },
     };
-    /** Awaited so deltas, and the reset that separates two attempts, arrive in order. */
+    if (deltas != null) {
+      return deltas.emit(event, config);
+    }
     return safeDispatchCustomEvent(
       GraphEvents.ON_SUMMARIZE_DELTA,
       event,
@@ -2516,12 +2549,12 @@ async function summarizeWithCacheHit({
     const windowWithCache =
       provider === Providers.BEDROCK
         ? applySummarizationHistoryCache({
-          messages: boundedHistory,
-          provider,
-          enabled: usePromptCache === true,
-          promptCacheTtl,
-          bedrockModelId,
-        })
+            messages: boundedHistory,
+            provider,
+            enabled: usePromptCache === true,
+            promptCacheTtl,
+            bedrockModelId,
+          })
         : boundedHistory;
     const history =
       system == null
@@ -2553,6 +2586,7 @@ async function summarizeWithCacheHit({
             stepId,
             config: traceConfig(config, 'cache_hit_compaction'),
             provider,
+            reasoningKey: agentContext.reasoningKey,
             graph,
             deltas,
           }),
@@ -2605,9 +2639,9 @@ async function summarizeWithCacheHit({
     output_tokens: usage?.output_tokens,
     ...(cacheDetails?.cache_read != null || cacheDetails?.cache_creation != null
       ? {
-        'input_token_details.cache_read': cacheDetails.cache_read,
-        'input_token_details.cache_creation': cacheDetails.cache_creation,
-      }
+          'input_token_details.cache_read': cacheDetails.cache_read,
+          'input_token_details.cache_creation': cacheDetails.cache_creation,
+        }
       : {}),
   });
   return { text, usage };

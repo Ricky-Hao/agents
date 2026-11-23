@@ -27,13 +27,13 @@ import {
 } from './CompileCheckTool';
 import { classifyAttachment, imageAttachmentContent } from './attachments';
 import { createLocalFileCheckpointer } from './FileCheckpointer';
+import { Constants, LOCAL_CODING_BUNDLE_NAMES } from '@/common';
 import { isWorkspaceClientTimeoutError } from './workspaceFS';
 import { applyEdit, locateEdit } from './editStrategies';
-import { decodeFile, encodeFile } from './textEncoding';
-import { withIntent } from '@/tools/intentArg';
-import { runPostEditSyntaxCheck } from './syntaxCheck';
 import { capHeadTail, capLines } from './toolResultCaps';
-import { Constants, LOCAL_CODING_BUNDLE_NAMES } from '@/common';
+import { decodeFile, encodeFile } from './textEncoding';
+import { runPostEditSyntaxCheck } from './syntaxCheck';
+import { withIntent } from '@/tools/intentArg';
 
 const MAX_READ_CHARS = 256000;
 const DEFAULT_MAX_RESULTS = 200;
@@ -382,9 +382,9 @@ function normalizeEdits(input: {
 }): Array<{ oldText: string; newText: string }> {
   const edits = Array.isArray(input.edits)
     ? input.edits.map((edit) => ({
-      oldText: edit.old_text ?? '',
-      newText: edit.new_text ?? '',
-    }))
+        oldText: edit.old_text ?? '',
+        newText: edit.new_text ?? '',
+      }))
     : [];
 
   if (input.old_text != null || input.new_text != null) {
@@ -450,11 +450,7 @@ export function createLocalReadFileTool(
         offset?: number;
         limit?: number;
       };
-      const path = await resolveWorkspacePathSafe(
-        input.path,
-        config,
-        'read'
-      );
+      const path = await resolveWorkspacePathSafe(input.path, config, 'read');
       const fileStat = await fs.stat(path);
       if (!fileStat.isFile()) {
         throw new Error(`Path is not a file: ${input.path}`);
@@ -584,11 +580,7 @@ export function createLocalWriteFileTool(
       if (config.readOnly === true) {
         throw new Error('write_file is blocked in read-only local mode.');
       }
-      const path = await resolveWorkspacePathSafe(
-        input.path,
-        config,
-        'write'
-      );
+      const path = await resolveWorkspacePathSafe(input.path, config, 'write');
       if (checkpointer != null) {
         await checkpointer.captureBeforeWrite(path);
       }
@@ -597,7 +589,7 @@ export function createLocalWriteFileTool(
       let encoding = { text: '', hasBom: false, newline: '\n' as const } as
         | ReturnType<typeof decodeFile>
         | { text: string; hasBom: false; newline: '\n' };
-      let existed = false;
+      let existed: boolean;
       try {
         const raw = await fs.readFile(path, 'utf8');
         const decoded = decodeFile(raw);
@@ -696,11 +688,7 @@ export function createLocalEditFileTool(
         throw new Error('edit_file requires old_text/new_text or edits[].');
       }
 
-      const path = await resolveWorkspacePathSafe(
-        input.path,
-        config,
-        'write'
-      );
+      const path = await resolveWorkspacePathSafe(input.path, config, 'write');
       const raw = await fs.readFile(path, 'utf8');
       const encoding = decodeFile(raw);
       const original = encoding.text;
@@ -1065,21 +1053,21 @@ function capFallbackGrepDisplay(
   skipped: string[],
   maxChars: number
 ): string {
+  // Keep the diagnostic visible even when a long path fills its text budget.
+  const skipLabel = 'skipped: ';
   const skipText =
     skipped.length === 0
       ? ''
-      : capLines(
-        skipped,
-        Math.max(1, Math.floor(maxChars / 5)),
-        (omitted) => `${omitted} more files skipped`
-      );
+      : skipLabel +
+        capLines(
+          skipped,
+          Math.max(1, Math.floor(maxChars / 5) - skipLabel.length),
+          (omitted) => `${omitted} more files skipped`
+        );
   if (matches.length === 0) {
     return skipText === '' ? 'No matches found.' : skipText;
   }
-  const matchText = capLines(
-    matches,
-    Math.max(1, maxChars - skipText.length)
-  );
+  const matchText = capLines(matches, Math.max(1, maxChars - skipText.length));
   return skipText === '' ? matchText : `${matchText}\n${skipText}`;
 }
 
@@ -1273,7 +1261,10 @@ export function createLocalGrepSearchTool(
             ? lines.join('\n')
             : result.stderr.trim() || 'No matches found.';
         let output = joined;
-        if (config.toolResultMaxChars != null && config.toolResultMaxChars > 0) {
+        if (
+          config.toolResultMaxChars != null &&
+          config.toolResultMaxChars > 0
+        ) {
           output =
             lines.length > 0
               ? capLines(lines, config.toolResultMaxChars)
@@ -1294,7 +1285,11 @@ export function createLocalGrepSearchTool(
         // skip sentinels used to inflate the count and the budget).
         const display =
           config.toolResultMaxChars != null && config.toolResultMaxChars > 0
-            ? capFallbackGrepDisplay(matches, skipped, config.toolResultMaxChars)
+            ? capFallbackGrepDisplay(
+                matches,
+                skipped,
+                config.toolResultMaxChars
+              )
             : formatFallbackGrepDisplay({ matches, skipped });
         return [
           display,
@@ -1463,33 +1458,35 @@ export function createLocalCodingTools(
       : undefined);
   const create = (name: string): DynamicStructuredTool => {
     switch (name) {
-    case Constants.READ_FILE:
-      return createLocalReadFileTool(config);
-    case Constants.WRITE_FILE:
-      return createLocalWriteFileTool(config, checkpointer);
-    case Constants.EDIT_FILE:
-      return createLocalEditFileTool(config, checkpointer);
-    case Constants.GREP_SEARCH:
-      return createLocalGrepSearchTool(config);
-    case Constants.GLOB_SEARCH:
-      return createLocalGlobSearchTool(config);
-    case Constants.LIST_DIRECTORY:
-      return createLocalListDirectoryTool(config);
-    case Constants.COMPILE_CHECK:
-      return createCompileCheckTool(config);
-    case Constants.BASH_TOOL:
-      return createLocalBashExecutionTool({ config });
-    case Constants.EXECUTE_CODE:
-      return createLocalCodeExecutionTool(config);
-    case Constants.PROGRAMMATIC_TOOL_CALLING:
-      return createLocalProgrammaticToolCallingTool(config);
-    default:
-      return createLocalBashProgrammaticToolCallingTool(config);
+      case Constants.READ_FILE:
+        return createLocalReadFileTool(config);
+      case Constants.WRITE_FILE:
+        return createLocalWriteFileTool(config, checkpointer);
+      case Constants.EDIT_FILE:
+        return createLocalEditFileTool(config, checkpointer);
+      case Constants.GREP_SEARCH:
+        return createLocalGrepSearchTool(config);
+      case Constants.GLOB_SEARCH:
+        return createLocalGlobSearchTool(config);
+      case Constants.LIST_DIRECTORY:
+        return createLocalListDirectoryTool(config);
+      case Constants.COMPILE_CHECK:
+        return createCompileCheckTool(config);
+      case Constants.BASH_TOOL:
+        return createLocalBashExecutionTool({ config });
+      case Constants.EXECUTE_CODE:
+        return createLocalCodeExecutionTool(config);
+      case Constants.PROGRAMMATIC_TOOL_CALLING:
+        return createLocalProgrammaticToolCallingTool(config);
+      default:
+        return createLocalBashProgrammaticToolCallingTool(config);
     }
   };
   // Select by name before constructing, so omitted tools are never built.
   const names =
-    config.codingToolNames == null ? undefined : new Set(config.codingToolNames);
+    config.codingToolNames == null
+      ? undefined
+      : new Set(config.codingToolNames);
   return LOCAL_CODING_BUNDLE_NAMES.filter(
     (name) => names == null || names.has(name)
   ).map(create);
