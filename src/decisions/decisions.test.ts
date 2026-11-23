@@ -1072,30 +1072,45 @@ describe('HTTP decisionModel', () => {
   );
 
   it('aborts the fetch signal when the monotonic deadline expires before the timer runs', async () => {
-    let seenSignal: AbortSignal | undefined;
-    const cancel = jest.fn();
-    const fetch: DecisionFetch = async (_url, init) => {
-      seenSignal = init.signal;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15);
-      return new Response(new ReadableStream<Uint8Array>({ cancel }), {
-        status: 200,
+    const timeoutMs = 2;
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+    const monotonicNow = jest.spyOn(performance, 'now').mockReturnValue(0);
+    try {
+      const lateResponse = Promise.withResolvers<Response>();
+      const fetch: jest.MockedFunction<DecisionFetch> = jest.fn(
+        (_url, init) => {
+          expect(init.signal.aborted).toBe(false);
+          // Advance the monotonic clock while the deadline timer stays pending.
+          monotonicNow.mockReturnValue(timeoutMs + 1);
+          return lateResponse.promise;
+        }
+      );
+      const decisionModel = createHttpDecisionModel({
+        endpoint: 'https://s1.example',
+        apiKey: 'k',
+        timeoutMs,
+        fetch,
       });
-    };
-    const decisionModel = createHttpDecisionModel({
-      endpoint: 'https://s1.example',
-      apiKey: 'k',
-      timeoutMs: 2,
-      fetch,
-    });
-    await expect(
-      decisionModel.decide({
-        state: {},
-        questions: { q: booleanQuestion('?') },
-      })
-    ).rejects.toMatchObject({ failure: 'timeout' });
-    expect(seenSignal?.aborted).toBe(true);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(cancel).toHaveBeenCalledTimes(1);
+      await expect(
+        decisionModel.decide({
+          state: {},
+          questions: { q: booleanQuestion('?') },
+        })
+      ).rejects.toMatchObject({ failure: 'timeout' });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch.mock.calls[0][1].signal.aborted).toBe(true);
+      const cancel = jest.fn();
+      lateResponse.resolve(
+        new Response(new ReadableStream<Uint8Array>({ cancel }), {
+          status: 200,
+        })
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      monotonicNow.mockRestore();
+      jest.useRealTimers();
+    }
   });
 
   it('bounds synchronous request preparation even when a state getter throws', async () => {

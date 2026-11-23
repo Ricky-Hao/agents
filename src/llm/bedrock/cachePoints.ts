@@ -12,7 +12,6 @@ function isConverseCachePoint(block: unknown): boolean {
     typeof block === 'object' &&
       block !== null &&
       'cachePoint' in block &&
-      block.cachePoint &&
       typeof block.cachePoint === 'object' &&
       block.cachePoint !== null &&
       'type' in block.cachePoint
@@ -63,7 +62,7 @@ export function applyCachePointsToConversePayload(fields: {
     const hasNovaToolBlock =
       isNovaModel &&
       lastContent.some(
-        (block) =>
+        (block: unknown) =>
           typeof block === 'object' &&
           block !== null &&
           ('toolResult' in block || 'toolUse' in block)

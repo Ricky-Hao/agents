@@ -69,9 +69,9 @@ class DelegatedApprovalModel extends FakeListChatModel {
               args: JSON.stringify(
                 parent
                   ? {
-                    description: `Review work ${index}`,
-                    subagent_type: 'team',
-                  }
+                      description: `Review work ${index}`,
+                      subagent_type: 'team',
+                    }
                   : { value: 'original' }
               ),
               id: parent ? `shared-parent-call-${index}` : 'shared-member-call',
@@ -148,21 +148,21 @@ function harness(callsPerRoot = 1, questions = false, parallelMembers = 1) {
           parallelMembers === 1
             ? members
             : [
-              inputs(`${id}_team_entry`),
-              ...members,
-              inputs(`${id}_team_result`),
-            ],
+                inputs(`${id}_team_entry`),
+                ...members,
+                inputs(`${id}_team_result`),
+              ],
         edges:
           parallelMembers === 1
             ? []
             : [
-              { from: `${id}_team_entry`, to: workerIds, edgeType: 'direct' },
-              {
-                from: workerIds,
-                to: `${id}_team_result`,
-                edgeType: 'direct',
-              },
-            ],
+                { from: `${id}_team_entry`, to: workerIds, edgeType: 'direct' },
+                {
+                  from: workerIds,
+                  to: `${id}_team_result`,
+                  edgeType: 'direct',
+                },
+              ],
         entryAgentId: parallelMembers === 1 ? workerIds[0] : `${id}_team_entry`,
         resultAgentId:
           parallelMembers === 1 ? workerIds[0] : `${id}_team_result`,

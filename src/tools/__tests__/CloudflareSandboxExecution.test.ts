@@ -267,7 +267,7 @@ it('reports the invoked runner name for Cloudflare caller-policy failures', asyn
   await expect(
     programmatic.invoke(
       {
-        code: 'direct_only_tool \'{}\'',
+        code: "direct_only_tool '{}'",
         tool_manifest: ['direct_only_tool'],
       },
       { toolCall }
@@ -1065,16 +1065,16 @@ describe('Cloudflare bridge runtime', () => {
       const content =
         encoding === 'stream'
           ? new ReadableStream<Uint8Array>({
-            start(controller) {
-              const chunk = new Uint8Array(
-                new SharedArrayBuffer(bytes.length)
-              );
-              chunk.set(bytes);
-              controller.enqueue(chunk.subarray(0, 2));
-              controller.enqueue(chunk.subarray(2));
-              controller.close();
-            },
-          })
+              start(controller) {
+                const chunk = new Uint8Array(
+                  new SharedArrayBuffer(bytes.length)
+                );
+                chunk.set(bytes);
+                controller.enqueue(chunk.subarray(0, 2));
+                controller.enqueue(chunk.subarray(2));
+                controller.close();
+              },
+            })
           : bytes.toString(encoding);
 
       await expect(
@@ -1170,7 +1170,7 @@ describe('Cloudflare bridge runtime', () => {
     });
 
     expect(command).toContain('-prune');
-    expect(command).toContain('\\( -name \'.*\' -prune \\) -o');
+    expect(command).toContain("\\( -name '.*' -prune \\) -o");
   });
 
   it('fails bridge listFiles for non-directory targets', async () => {

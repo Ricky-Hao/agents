@@ -8294,6 +8294,7 @@ describe('formatAgentMessages', () => {
         { type: ContentTypes.TEXT, text: 'Summary of the earliest turns' },
       ],
       tokenCount: 12,
+      boundary: { messageId: 'summary-step', contentIndex: 0 },
       ...(coverage != null ? { coverage } : {}),
     });
 
@@ -8369,6 +8370,7 @@ describe('formatAgentMessages', () => {
               type: ContentTypes.SUMMARY,
               content: [{ type: ContentTypes.TEXT, text: 'S'.repeat(500) }],
               tokenCount: 120,
+              boundary: { messageId: 'summary-step', contentIndex: 0 },
               coverage: { retainedFromMessageId: 'm2' },
             },
             { type: ContentTypes.TEXT, text: 'Reply' },

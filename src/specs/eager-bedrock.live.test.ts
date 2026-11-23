@@ -56,7 +56,7 @@ function buildPrompt(): string {
     'SELECT',
     `  ${projections}`,
     'FROM analytics.events',
-    'WHERE event_date >= today() - 30 AND tenant_id = \'tenant_live_test\'',
+    "WHERE event_date >= today() - 30 AND tenant_id = 'tenant_live_test'",
     '```',
   ].join('\n');
 }

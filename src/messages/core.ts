@@ -2617,12 +2617,14 @@ export function formatAnthropicArtifactContent(messages: BaseMessage[]): void {
   }
 }
 
-export function projectArtifactPayload(
+export function latestArtifactToolBatch(
   messages: BaseMessage[],
-  maxChars = HARD_MAX_TOOL_RESULT_CHARS
-): BaseMessage[] {
+  inCallOrder = true
+):
+  | { parent: AIMessage; toolIndices: number[] }
+  | undefined {
   const lastMessageY = messages[messages.length - 1];
-  if (!(lastMessageY instanceof ToolMessage)) return messages;
+  if (!(lastMessageY instanceof ToolMessage)) return;
 
   // Find the latest AIMessage with tool_calls that this tool message belongs to
   const latestAIParentIndex = findLastIndex(
@@ -2634,14 +2636,46 @@ export function projectArtifactPayload(
       false
   );
 
-  if (latestAIParentIndex === -1) return messages;
+  if (latestAIParentIndex === -1) return;
+  const parent = messages[latestAIParentIndex] as AIMessage;
+  const toolIndices: number[] = [];
+  if (inCallOrder) {
+    const byId = new Map<string, number>();
+    for (let index = latestAIParentIndex + 1; index < messages.length; index++) {
+      const message = messages[index];
+      if (message instanceof ToolMessage) byId.set(message.tool_call_id, index);
+    }
+    for (const call of parent.tool_calls ?? []) {
+      const index = call.id == null ? undefined : byId.get(call.id);
+      if (index != null) toolIndices.push(index);
+    }
+  } else {
+    for (let index = latestAIParentIndex + 1; index < messages.length; index++) {
+      if (messages[index] instanceof ToolMessage) toolIndices.push(index);
+    }
+  }
+  return { parent, toolIndices };
+}
+
+export type ArtifactProjection = {
+  remainingChars: number;
+  imagePositions: Map<object, number>;
+};
+
+export function projectArtifactPayload(
+  messages: BaseMessage[],
+  maxChars = HARD_MAX_TOOL_RESULT_CHARS,
+  projection?: ArtifactProjection
+): BaseMessage[] {
+  const batch = latestArtifactToolBatch(messages, projection != null);
+  if (batch == null) return messages;
 
   // Single pass: collect relevant tool messages with artifacts and aggregate
   const aggregate = createBoundedContentAccumulator(maxChars);
   let formattedMessages: BaseMessage[] | undefined;
   const artifactProvenanceParts: ProviderMessageProvenancePart[] = [];
 
-  for (let i = latestAIParentIndex + 1; i < messages.length; i++) {
+  for (const i of batch.toolIndices) {
     const msg = messages[i];
     if (
       !(msg instanceof ToolMessage) ||
@@ -2710,6 +2744,15 @@ export function projectArtifactPayload(
     }
   }
 
+  if (projection != null) {
+    projection.remainingChars = aggregate.remainingChars;
+    let imagePosition = 0;
+    for (const block of aggregate.blocks) {
+      if (block.type === 'image_url') {
+        projection.imagePositions.set(block, ++imagePosition);
+      }
+    }
+  }
   if (aggregate.hasContent && artifactProvenanceParts.length > 0) {
     const artifactPayload = new HumanMessage({
       content: toLangChainContent(aggregate.blocks),

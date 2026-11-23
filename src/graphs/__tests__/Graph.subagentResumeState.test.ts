@@ -139,7 +139,9 @@ describe('subagent graph resume state', () => {
         const target = makeGraph('target', codeSessionKey);
         target.toolOutputReferences = { enabled: true };
         const targetNode = initializeToolNode(target);
-        const restoredState = JSON.parse(serialized) as SubagentGraphResumeState;
+        const restoredState = JSON.parse(
+          serialized
+        ) as SubagentGraphResumeState;
         target.restoreSubagentResumeState(restoredState, 'target-scope');
 
         expect(target.createSubagentResumeState('target-scope')).toEqual(
@@ -279,31 +281,40 @@ describe('subagent graph resume state', () => {
         partitions: ['partition-A', 'partition-B', 'partition-C'],
         legacyIndex: 0,
       },
-    ])('restores $description identities', ({ partitions, legacyIndex, formattedKeys }) => {
-      const source = makeGraph('source');
-      const target = makeGraph('target');
-      initializePartitionState(source, partitions);
-      initializePartitionState(target, partitions);
-      const state = source.createSubagentResumeState('source-scope');
-      if (legacyIndex >= 0) {
-        state.toolNodes[legacyIndex].stateKey = legacyKey(
-          state.toolNodes[legacyIndex].stateKey
-        );
-      }
-      if (formattedKeys === true) {
-        for (const nodeState of state.toolNodes) {
-          nodeState.stateKey = JSON.stringify(JSON.parse(nodeState.stateKey), null, 2);
+    ])(
+      'restores $description identities',
+      ({ partitions, legacyIndex, formattedKeys }) => {
+        const source = makeGraph('source');
+        const target = makeGraph('target');
+        initializePartitionState(source, partitions);
+        initializePartitionState(target, partitions);
+        const state = source.createSubagentResumeState('source-scope');
+        if (legacyIndex >= 0) {
+          state.toolNodes[legacyIndex].stateKey = legacyKey(
+            state.toolNodes[legacyIndex].stateKey
+          );
         }
+        if (formattedKeys === true) {
+          for (const nodeState of state.toolNodes) {
+            nodeState.stateKey = JSON.stringify(
+              JSON.parse(nodeState.stateKey),
+              null,
+              2
+            );
+          }
+        }
+        if (reversed) state.toolNodes.reverse();
+        const serialized = JSON.stringify(state);
+        const restoredState = JSON.parse(
+          serialized
+        ) as SubagentGraphResumeState;
+        target.restoreSubagentResumeState(restoredState, 'target-scope');
+        expect(target.createSubagentResumeState('target-scope')).toEqual(
+          source.createSubagentResumeState('source-scope')
+        );
+        expect(JSON.stringify(restoredState)).toBe(serialized);
       }
-      if (reversed) state.toolNodes.reverse();
-      const serialized = JSON.stringify(state);
-      const restoredState = JSON.parse(serialized) as SubagentGraphResumeState;
-      target.restoreSubagentResumeState(restoredState, 'target-scope');
-      expect(target.createSubagentResumeState('target-scope')).toEqual(
-        source.createSubagentResumeState('source-scope')
-      );
-      expect(JSON.stringify(restoredState)).toBe(serialized);
-    });
+    );
 
     it.each([
       ['legacy', 'compact'],
@@ -312,36 +323,43 @@ describe('subagent graph resume state', () => {
       ['modern', 'compact'],
       ['modern', 'whitespace'],
       ['modern', 'escaped'],
-    ])(
-      'rejects duplicate canonical %s identities (%s)',
-      (format, encoding) => {
-        const source = makeGraph('source');
-        const target = makeGraph('target');
-        const partitions = format === 'legacy'
+    ])('rejects duplicate canonical %s identities (%s)', (format, encoding) => {
+      const source = makeGraph('source');
+      const target = makeGraph('target');
+      const partitions =
+        format === 'legacy'
           ? [undefined, 'partition-A']
           : ['partition-A', 'partition-B'];
-        initializePartitionState(source, partitions);
-        initializePartitionState(target, partitions);
-        const checkpoint = source.createSubagentResumeState('source-scope');
-        const state = format === 'legacy' ? legacyState(checkpoint) : checkpoint;
-        state.toolNodes[1].stateKey = state.toolNodes[0].stateKey;
-        const stateKey = state.toolNodes[1].stateKey;
-        if (encoding === 'whitespace') {
-          state.toolNodes[1].stateKey = JSON.stringify(JSON.parse(stateKey), null, 2);
-        }
-        if (encoding === 'escaped') {
-          state.toolNodes[1].stateKey = stateKey.replace('child-agent', '\\u0063hild-agent');
-        }
-        if (encoding !== 'compact') {
-          expect(state.toolNodes[0].stateKey).not.toBe(state.toolNodes[1].stateKey);
-          expect(JSON.parse(state.toolNodes[0].stateKey)).toEqual(
-            JSON.parse(state.toolNodes[1].stateKey)
-          );
-        }
-        if (reversed) state.toolNodes.reverse();
-        expectRejectedWithoutMutation(target, state);
+      initializePartitionState(source, partitions);
+      initializePartitionState(target, partitions);
+      const checkpoint = source.createSubagentResumeState('source-scope');
+      const state = format === 'legacy' ? legacyState(checkpoint) : checkpoint;
+      state.toolNodes[1].stateKey = state.toolNodes[0].stateKey;
+      const stateKey = state.toolNodes[1].stateKey;
+      if (encoding === 'whitespace') {
+        state.toolNodes[1].stateKey = JSON.stringify(
+          JSON.parse(stateKey),
+          null,
+          2
+        );
       }
-    );
+      if (encoding === 'escaped') {
+        state.toolNodes[1].stateKey = stateKey.replace(
+          'child-agent',
+          '\\u0063hild-agent'
+        );
+      }
+      if (encoding !== 'compact') {
+        expect(state.toolNodes[0].stateKey).not.toBe(
+          state.toolNodes[1].stateKey
+        );
+        expect(JSON.parse(state.toolNodes[0].stateKey)).toEqual(
+          JSON.parse(state.toolNodes[1].stateKey)
+        );
+      }
+      if (reversed) state.toolNodes.reverse();
+      expectRejectedWithoutMutation(target, state);
+    });
 
     it('rejects a changed modern partition after reserving the default identity', () => {
       const source = makeGraph('source');
@@ -355,7 +373,10 @@ describe('subagent graph resume state', () => {
   });
 
   it('rejects a legacy identity with multiple remaining live candidates', () => {
-    const source = makeGraph('source', 'partition-A', ['child-agent', 'removed-agent']);
+    const source = makeGraph('source', 'partition-A', [
+      'child-agent',
+      'removed-agent',
+    ]);
     initializeToolNode(source);
     initializeToolNode(source, 'removed-agent');
     const target = makeGraph('target');
@@ -434,7 +455,9 @@ describe('subagent graph resume state', () => {
         });
         initializeToolNode(target, agentId);
       }
-      const state = legacyState(source.createSubagentResumeState('source-scope'));
+      const state = legacyState(
+        source.createSubagentResumeState('source-scope')
+      );
       state.toolNodes[1].stateKey = createKey(
         JSON.parse(state.toolNodes[1].stateKey) as string[]
       );

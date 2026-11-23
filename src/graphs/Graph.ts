@@ -37,6 +37,8 @@ import type {
   GraphFactoryRequest,
 } from '@/graphs/graphFactory';
 import type { OverflowRecoveryPlan } from '@/llm/contextOverflowRecovery';
+import type { ToolImageRead } from '@/tools/imageRead';
+import type { ArtifactProjection } from '@/messages/core';
 import type { FallbackErrorContext } from '@/llm/invoke';
 import type { HandoffRouting } from './handoff';
 import type { HookRegistry } from '@/hooks';
@@ -1106,7 +1108,7 @@ export abstract class Graph<
   protected createSubagentFadingResumeState(): Pick<
     SubagentGraphResumeState,
     'fadingTier' | 'fadingTiers'
-    > {
+  > {
     return {};
   }
 
@@ -1151,8 +1153,8 @@ export abstract class Graph<
       ...(this._toolOutputRegistry == null
         ? {}
         : {
-          toolOutputReferences: this._toolOutputRegistry.snapshotState(runId),
-        }),
+            toolOutputReferences: this._toolOutputRegistry.snapshotState(runId),
+          }),
     };
   }
 
@@ -1174,7 +1176,10 @@ export abstract class Graph<
     }
     const savedStateKeys = new Set<string>();
     const toolNodeStatesByKey = new Map<string, SubagentToolNodeResumeState>();
-    const legacyNodeStatesByKey = new Map<string, SubagentToolNodeResumeState>();
+    const legacyNodeStatesByKey = new Map<
+      string,
+      SubagentToolNodeResumeState
+    >();
     for (const nodeState of state.toolNodes) {
       const identity = parseSubagentToolNodeStateKey(nodeState.stateKey);
       if (identity == null) {
@@ -1367,6 +1372,7 @@ export abstract class Graph<
 export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
   readonly runName: string = STANDARD_GRAPH_RUN_NAME;
   overrideModel?: t.ChatModel;
+  imageRead?: ToolImageRead;
   private subagentModelOverride?: t.ChatModel;
   private readonly graphFactory: GraphFactory;
   private readonly supportsMultiAgentChildren: boolean;
@@ -2071,8 +2077,8 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
         ],
         ...(this.latestCompletionByStep.has(runStep.id)
           ? {
-            latestCompletionAt: this.latestCompletionByStep.get(runStep.id),
-          }
+              latestCompletionAt: this.latestCompletionByStep.get(runStep.id),
+            }
           : {}),
         openMessageStep:
           this.openMessageStepByAgent.get(agentKey) === runStep.id,
@@ -2086,8 +2092,8 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
       ...(this.stopContinuationExecutionId === ''
         ? {}
         : {
-          stopContinuationExecutionId: this.stopContinuationExecutionId,
-        }),
+            stopContinuationExecutionId: this.stopContinuationExecutionId,
+          }),
       streamSegment: this.streamSegment,
       toolCallSteps: [...this.toolCallStepIds].map(([toolCallId, stepId]) => ({
         toolCallId,
@@ -2775,7 +2781,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
   protected override createSubagentFadingResumeState(): Pick<
     SubagentGraphResumeState,
     'fadingTier' | 'fadingTiers'
-    > {
+  > {
     const fadingTier = this.getFadingTier();
     const fadingTiers = this.getFadingTiers();
     return {
@@ -3037,6 +3043,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
         errorHandler: (data, metadata): Promise<boolean> =>
           StandardGraph.handleToolCallErrorStatic(this, data, metadata),
       });
+      node.imageRead = this.imageRead;
       this.registerCompiledToolNode(node);
       if (agentContext != null) {
         this.subagentToolNodes.set(agentContext.agentId, node);
@@ -3061,7 +3068,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
     const traditionalToolMap =
       graphTools && graphTools.length > 0
         ? new Map([
-          ...(currentToolMap ??
+            ...(currentToolMap ??
               new Map(
                 baseTools
                   .filter(
@@ -3069,10 +3076,10 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
                   )
                   .map((t) => [t.name, t] as [string, t.GenericTool])
               )),
-          ...graphTools
-            .filter((t): t is t.GenericTool & { name: string } => 'name' in t)
-            .map((t) => [t.name, t] as [string, t.GenericTool]),
-        ])
+            ...graphTools
+              .filter((t): t is t.GenericTool & { name: string } => 'name' in t)
+              .map((t) => [t.name, t] as [string, t.GenericTool]),
+          ])
         : currentToolMap;
 
     const node = new CustomToolNode<t.BaseGraphState>({
@@ -3939,11 +3946,22 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
         return best;
       };
 
+      const imageRead = this.overrideModel == null ? this.imageRead : undefined;
+      const artifactProjection: ArtifactProjection | undefined =
+        imageRead == null
+          ? undefined
+          : { remainingChars: maxProviderToolResultChars, imagePositions: new Map() };
+      const discardArtifactBudget = (): void => {
+        if (artifactProjection == null) return;
+        artifactProjection.imagePositions.clear();
+        artifactProjection.remainingChars = maxProviderToolResultChars;
+      };
       const projectServingArtifacts = (
         candidate: BaseMessage[],
         provider: t.ProviderName,
         clientOptions: t.ClientOptions | undefined,
-        maxChars: number
+        maxChars: number,
+        projection?: ArtifactProjection
       ): BaseMessage[] => {
         if (!(candidate[candidate.length - 1] instanceof ToolMessage)) {
           return candidate;
@@ -3960,7 +3978,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
         ) {
           return trackProviderMessageOrigins(
             candidate,
-            projectArtifactPayload(candidate, maxChars)
+            projectArtifactPayload(candidate, maxChars, projection)
           );
         }
         return candidate;
@@ -3978,15 +3996,15 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
             | undefined;
           return options?.promptCache === true
             ? trackProviderMessageOrigins(
-              candidate,
-              addBedrockTailCacheControl(
                 candidate,
-                resolveBedrockPromptCacheTtl(
-                  options.promptCacheTtl,
-                  options.model
+                addBedrockTailCacheControl(
+                  candidate,
+                  resolveBedrockPromptCacheTtl(
+                    options.promptCacheTtl,
+                    options.model
+                  )
                 )
               )
-            )
             : candidate;
         }
         if (
@@ -3999,12 +4017,12 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
         const options = clientOptions as t.AnthropicClientOptions | undefined;
         return options?.promptCache === true
           ? trackProviderMessageOrigins(
-            candidate,
-            addTailCacheControl(
               candidate,
-              resolvePromptCacheTtl(options.promptCacheTtl)
+              addTailCacheControl(
+                candidate,
+                resolvePromptCacheTtl(options.promptCacheTtl)
+              )
             )
-          )
           : candidate;
       };
 
@@ -4014,7 +4032,8 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
           finalMessages,
           agentContext.provider,
           agentContext.clientOptions,
-          maxProviderToolResultChars
+          maxProviderToolResultChars,
+          artifactProjection
         );
 
         if (artifactCandidate !== finalMessages) {
@@ -4023,6 +4042,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
             artifactBaseMessages = finalMessages;
             finalMessages = artifactCandidate;
           } else {
+            discardArtifactBudget();
             emitAgentLog(
               config,
               'warn',
@@ -4044,6 +4064,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
       let finalProjection = measureProviderPayload(finalMessages);
       if (artifactBaseMessages != null) {
         if (!finalProjection.fits) {
+          discardArtifactBudget();
           finalMessages = projectProviderReferences(
             applyProviderMessageTransforms(artifactBaseMessages)
           );
@@ -4217,6 +4238,13 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
       );
 
       const beforeFinalProviderProjection = finalMessages;
+      let exposedImages: ReturnType<ToolImageRead['project']>['exposed'] = [];
+      const measurePreparedMessages = (
+        prepared: BaseMessage[]
+      ): ReturnType<typeof measureProviderPayload> =>
+        measureProviderPayload(
+          trackProviderMessageOrigins(beforeFinalProviderProjection, prepared)
+        );
       const preparedRequest = prepareProviderRequest({
         model: (this.overrideModel ?? model) as t.ChatModel,
         messages: beforeFinalProviderProjection,
@@ -4225,13 +4253,20 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
         config,
         maxToolResultChars: maxProviderToolResultChars,
         toolHistory,
-        measure: (preparedMessages) =>
-          measureProviderPayload(
-            trackProviderMessageOrigins(
-              beforeFinalProviderProjection,
-              preparedMessages
-            )
-          ),
+        projectResponsesImages:
+          imageRead != null && artifactProjection != null
+            ? (prepared): BaseMessage[] => {
+                const projection = imageRead.project(
+                  messages,
+                  prepared,
+                  artifactProjection,
+                  (candidate) => measurePreparedMessages(candidate).fits
+                );
+                exposedImages = projection.exposed;
+                return projection.messages;
+              }
+            : undefined,
+        measure: measurePreparedMessages,
       });
       finalMessages = preparedRequest.messages;
 
@@ -4244,10 +4279,10 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
         preparedRequest.measurement ?? measureProviderPayload(finalMessages);
       const preInvokeContextOverflowError = !finalProjection.fits
         ? createProviderPayloadOverflowError({
-          projection: finalProjection,
-          provider: agentContext.provider,
-          info: 'Provider message formatting exceeded the context budget and no safe synthetic-context compaction could make it fit.',
-        })
+            projection: finalProjection,
+            provider: agentContext.provider,
+            info: 'Provider message formatting exceeded the context budget and no safe synthetic-context compaction could make it fit.',
+          })
         : undefined;
 
       if (
@@ -4285,10 +4320,10 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
           const toolPct =
             budgetBreakdown.toolSchemaTokens > 0
               ? Math.round(
-                (budgetBreakdown.toolSchemaTokens /
+                  (budgetBreakdown.toolSchemaTokens /
                     budgetBreakdown.instructionTokens) *
                     100
-              )
+                )
               : 0;
           guidance =
             toolPct > 50
@@ -4423,9 +4458,9 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
             agentContext.langfuse
           )
             ? resolveToolOutputTracingConfig(
-              this.langfuse,
-              agentContext.langfuse
-            )
+                this.langfuse,
+                agentContext.langfuse
+              )
             : undefined,
         });
         if (langfuseHandler != null) {
@@ -4473,6 +4508,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
               invokeConfig
             )
         );
+        imageRead?.confirm(exposedImages);
       } catch (primaryError) {
         clearCurrentDeltaStepMarkers({
           graph: this,
@@ -4623,20 +4659,20 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
           const translatedRecovery =
             fallbackContext != null
               ? {
-                ...recovery,
-                budgetTokens: minDefined(
-                  getBlindRecoveryBudget(agentContext.maxContextTokens),
-                  localMeasurement != null
-                    ? recovery.budgetTokens
-                    : translateRecoveryBudget(
-                      recovery.budgetTokens,
-                      recovery.observedCalibrationRatio ??
+                  ...recovery,
+                  budgetTokens: minDefined(
+                    getBlindRecoveryBudget(agentContext.maxContextTokens),
+                    localMeasurement != null
+                      ? recovery.budgetTokens
+                      : translateRecoveryBudget(
+                          recovery.budgetTokens,
+                          recovery.observedCalibrationRatio ??
                             CALIBRATION_RATIO_MAX,
-                      agentContext.calibrationRatio
-                    )
-                ),
-                observedCalibrationRatio: undefined,
-              }
+                          agentContext.calibrationRatio
+                        )
+                  ),
+                  observedCalibrationRatio: undefined,
+                }
               : recovery;
           const canReduceContext =
             canSummarizeOverflow ||
@@ -4711,9 +4747,9 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
                     fallbackMaxContextTokens == null
                       ? primaryContextBudget
                       : Math.min(
-                        primaryContextBudget ?? fallbackMaxContextTokens,
-                        fallbackMaxContextTokens
-                      );
+                          primaryContextBudget ?? fallbackMaxContextTokens,
+                          fallbackMaxContextTokens
+                        );
                   const measureFallback = (
                     candidate: BaseMessage[]
                   ): ReturnType<typeof measureProviderPayload> =>
@@ -4723,9 +4759,9 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
                     });
                   const source = agentContext.useLegacyContent
                     ? trackProviderMessageOrigins(
-                      fallbackMessages,
-                      formatContentStrings(fallbackMessages)
-                    )
+                        fallbackMessages,
+                        formatContentStrings(fallbackMessages)
+                      )
                     : fallbackMessages;
                   const boundedSource = trackProviderMessageOrigins(
                     source,
@@ -4762,13 +4798,13 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
                       fallbackClientOptions as { model?: string }
                     )
                       ? trackProviderMessageOrigins(
-                        candidate,
-                        sanitizeOrphanToolBlocks(
                           candidate,
-                          (original, clone) =>
-                            contextPressure.trackClone(original, clone)
+                          sanitizeOrphanToolBlocks(
+                            candidate,
+                            (original, clone) =>
+                              contextPressure.trackClone(original, clone)
+                          )
                         )
-                      )
                       : candidate;
                     const cached = applyServingTailCache(
                       sanitized,
@@ -5381,19 +5417,19 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
             const configuredRequest: GraphFactoryRequest =
               request.kind === 'multi-agent'
                 ? {
-                  kind: 'multi-agent',
-                  input: {
-                    ...request.input,
-                    toolExecution: runtimeConfig.toolExecution,
-                  },
-                }
+                    kind: 'multi-agent',
+                    input: {
+                      ...request.input,
+                      toolExecution: runtimeConfig.toolExecution,
+                    },
+                  }
                 : {
-                  kind: 'standard',
-                  input: {
-                    ...request.input,
-                    toolExecution: runtimeConfig.toolExecution,
-                  },
-                };
+                    kind: 'standard',
+                    input: {
+                      ...request.input,
+                      toolExecution: runtimeConfig.toolExecution,
+                    },
+                  };
             const childGraph = graphFactory(configuredRequest);
             if (subagentModelOverride != null) {
               childGraph.overrideModel = subagentModelOverride;
@@ -5850,9 +5886,9 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
 
               const unmarkHandlerDispatchedEvent = handler
                 ? this.markHandlerDispatchedEvent(
-                  GraphEvents.ON_RUN_STEP,
-                  runStep.id
-                )
+                    GraphEvents.ON_RUN_STEP,
+                    runStep.id
+                  )
                 : undefined;
               try {
                 if (resolvedConfig) {
@@ -6174,9 +6210,9 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
     const errorDetail =
       error?.message != null
         ? `: ${serializeToolContentBounded(
-          error.message,
-          Math.max(0, eventValueLimit - errorOutputPrefix.length - 2)
-        )}`
+            error.message,
+            Math.max(0, eventValueLimit - errorOutputPrefix.length - 2)
+          )}`
         : '';
 
     const runStep = graph.getRunStep(stepId);

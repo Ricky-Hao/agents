@@ -15,7 +15,8 @@ describe('summarization primitives', () => {
       expect(
         carrier.startsWith('<summary>\ncheckpoint body\n</summary>\n\n')
       ).toBe(true);
-      expect(carrier).toContain('This is your own checkpoint');
+      expect(carrier).toContain('This is a generated summary');
+      expect(carrier).not.toContain('you wrote');
     });
 
     /** A stored summary is budgeted for by measuring this, so the wrapper has
@@ -51,8 +52,12 @@ describe('summarization primitives', () => {
 
   describe('buildSummarizationInstruction', () => {
     it('explicitly forbids tools and task continuation in both default checkpoint prompts', () => {
-      expect(DEFAULT_SUMMARIZATION_PROMPT).toContain('Do not call tools, perform calculations, or continue the task');
-      expect(DEFAULT_UPDATE_SUMMARIZATION_PROMPT).toContain('Do not call tools, perform calculations, or continue the task');
+      expect(DEFAULT_SUMMARIZATION_PROMPT).toContain(
+        'Do not call tools, perform calculations, or continue the task'
+      );
+      expect(DEFAULT_UPDATE_SUMMARIZATION_PROMPT).toContain(
+        'Do not call tools, perform calculations, or continue the task'
+      );
     });
 
     it('sends the fresh prompt when there is no prior summary', () => {
@@ -102,7 +107,13 @@ describe('summarization primitives', () => {
     });
 
     it('references a prior checkpoint already carried by the cached prefix', () => {
-      const result = buildSummarizationInstruction('fresh', 'update', 'earlier checkpoint', '<index/>', true);
+      const result = buildSummarizationInstruction(
+        'fresh',
+        'update',
+        'earlier checkpoint',
+        '<index/>',
+        true
+      );
       expect(result).toContain('<index/>\n\nupdate');
       expect(result).toContain('already present in the request prefix');
       expect(result).not.toContain('earlier checkpoint');

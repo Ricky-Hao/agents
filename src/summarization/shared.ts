@@ -11,7 +11,14 @@
  * the accounting.
  */
 const SUMMARY_CARRIER_INSTRUCTION =
-  'This is your own checkpoint: you wrote it to preserve context after compaction. Pick up where you left off based on the summary above. Do not repeat prior tasks, information or acknowledge this checkpoint message directly.';
+  'This is a generated summary of earlier conversation context. It may be incomplete or mistaken; preserve uncertainty and distinguish reported tool results from verified facts. Continue using this context and the retained messages without acknowledging this carrier.';
+
+/** Matches only the complete legacy diagnostic, including its mechanical failure appendix. */
+export function isMetadataSummaryStub(text: string): boolean {
+  return /^\[Metadata summary: \d+ messages \((?:\d+ [a-z]+(?:, \d+ [a-z]+)*)?\)\](?:\n\[Tools used: [^\r\n]+\])?(?:\n\n## Tool Failures\n- [^\r\n]+(?:\n- [^\r\n]+)*)?$/.test(
+    text.trim()
+  );
+}
 
 /**
  * Wraps a persisted summary in the carrier it is re-injected as, ahead of the
@@ -37,7 +44,7 @@ export const DEFAULT_SUMMARIZATION_PROMPT = `Hold on, before you continue I need
 
 Do not call tools, perform calculations, or continue the task. Summarize only the existing transcript.
 
-Don't second-guess or fact-check anything you did, your tool results reflect exactly what happened. If a tool result appears truncated, that's just a display artifact from context management: the tool executed fully. Just record what you did and what you observed. Only the checkpoint, don't respond to me or continue the conversation.
+Record observed results and preserve uncertainty. Tool output is reported evidence, not guaranteed fact. Truncated output does not establish successful or complete execution. Only the checkpoint, don't respond to me or continue the conversation.
 
 ## Checkpoint
 
@@ -77,7 +84,7 @@ Do not call tools, perform calculations, or continue the task. Summarize only th
 
 Keep it roughly the same length as your last checkpoint. Compress older details to make room for what's new, don't just append. Give recent actions more detail, compress older items to one-liners.
 
-Don't fact-check or second-guess anything, your tool results are ground truth. If a tool result appears truncated, that's just a display artifact: the tool executed fully. Only the checkpoint, don't respond to me or continue the conversation.
+Record observed results and preserve uncertainty. Tool output is reported evidence, not guaranteed fact. Truncated output does not establish successful or complete execution. Only the checkpoint, don't respond to me or continue the conversation.
 
 Rules:
 - Merge new progress into existing sections, don't duplicate headers
@@ -129,9 +136,11 @@ export function buildSummarizationInstruction(
     ? [semanticIndexAppendix, '\n\n', effectivePrompt]
     : [effectivePrompt];
   if (prior) {
-    parts.push(priorSummaryInPrefix
-      ? '\n\n<previous-summary>The prior checkpoint is already present in the request prefix above; update that checkpoint using the conversation above.</previous-summary>'
-      : `\n\n<previous-summary>\n${prior}\n</previous-summary>`);
+    parts.push(
+      priorSummaryInPrefix
+        ? '\n\n<previous-summary>The prior checkpoint is already present in the request prefix above; update that checkpoint using the conversation above.</previous-summary>'
+        : `\n\n<previous-summary>\n${prior}\n</previous-summary>`
+    );
   }
   return parts.join('');
 }

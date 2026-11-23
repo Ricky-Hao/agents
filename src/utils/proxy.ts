@@ -43,8 +43,8 @@ export function shouldBypassProxy(
       if (!match) {
         return false;
       }
-      const entryHost = (match[1] ?? '').replace(/^\./, '').toLowerCase();
-      const entryPort = match[2];
+      const entryHost = match[1].replace(/^\./, '').toLowerCase();
+      const entryPort = match.at(2);
       if (entryHost === '') {
         return false;
       }

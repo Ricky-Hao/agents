@@ -701,7 +701,7 @@ export class CustomAnthropic extends ChatAnthropicMessages {
 
     const source = (async function* (): AsyncGenerator<
       SmoothItem<AnthropicEmittedChunk>
-      > {
+    > {
       for await (const data of stream) {
         const result = _makeMessageChunkFromAnthropicEvent(
           data as Anthropic.Beta.Messages.BetaRawMessageStreamEvent,
@@ -765,8 +765,8 @@ export class CustomAnthropic extends ChatAnthropicMessages {
             const chunkForPiece =
               !piece.isFirst && cloned.usage_metadata != null
                 ? new AIMessageChunk(
-                  Object.assign({}, cloned, { usage_metadata: undefined })
-                )
+                    Object.assign({}, cloned, { usage_metadata: undefined })
+                  )
                 : cloned;
             return toEmittedChunk(piece.text, chunkForPiece);
           },

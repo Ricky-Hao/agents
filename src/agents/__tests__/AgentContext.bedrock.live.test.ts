@@ -257,11 +257,9 @@ function addLatestUserOnlyBedrockCacheControl(
     }
 
     let workingContent: MessageContentComplex[];
-    let modified = false;
-
     if (hasArrayContent) {
       workingContent = stripCacheMarkers(content as MessageContentComplex[]);
-      modified = workingContent.length !== content.length;
+      let modified = workingContent.length !== content.length;
       const lastTextIndex = workingContent.findLastIndex((block) => {
         const type = (block as { type?: string }).type;
         const text = (block as { text?: string }).text;

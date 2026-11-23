@@ -1212,11 +1212,11 @@ describe('Langfuse per-run routing integration', () => {
         async (input): Promise<StopHookOutput> =>
           input.continuationCount === 0
             ? {
-              decision: 'block',
-              injectedMessages: [
-                { role: 'user', content: 'late steer', source: 'steer' },
-              ],
-            }
+                decision: 'block',
+                injectedMessages: [
+                  { role: 'user', content: 'late steer', source: 'steer' },
+                ],
+              }
             : { decision: 'continue' },
       ],
     });

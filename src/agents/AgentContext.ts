@@ -62,6 +62,7 @@ import { snapshotCompactionSemanticIndex } from '@/summarization/semanticIndex';
 import { normalizeToPythonIdentifier } from '@/tools/ProgrammaticToolCalling';
 import { createExactTokenCountCache } from '@/llm/contextPressureMeter';
 import { markProviderTextInput } from '@/protection/providerTextInput';
+import { CODE_INTERNAL_FILE_GUIDANCE } from '@/tools/codeGuidance';
 import { buildSummaryCarrierText } from '@/summarization/shared';
 import { createSchemaOnlyTools } from '@/tools/schema';
 import { apportionTokenCounts } from '@/utils/tokens';
@@ -176,9 +177,9 @@ export class AgentContext {
       compactionSemanticIndex == null
         ? agentConfig
         : {
-          ...agentConfig,
-          compactionSemanticIndex: agentContext.compactionSemanticIndex,
-        };
+            ...agentConfig,
+            compactionSemanticIndex: agentContext.compactionSemanticIndex,
+          };
     agentContext.subagentConfigs = subagentConfigs;
     agentContext.maxSubagentDepth = maxSubagentDepth;
     /**
@@ -478,7 +479,11 @@ export class AgentContext {
   private correctedContextBudgetMode?: t.ContextBudgetMode;
 
   get summarizationBudgetMode(): t.ContextBudgetMode {
-    return this.correctedContextBudgetMode ?? this.summarizationConfig?.contextBudgetMode ?? 'input';
+    return (
+      this.correctedContextBudgetMode ??
+      this.summarizationConfig?.contextBudgetMode ??
+      'input'
+    );
   }
   /**
    * Prompt size, normalized into the local counter's uncalibrated units, at
@@ -648,6 +653,7 @@ export class AgentContext {
     const showGroupLabels = groups.length > 1;
     return (
       '\n\n## Programmatic Tool Calling' +
+      `\n\n${CODE_INTERNAL_FILE_GUIDANCE}` +
       groups
         .map(
           ({ tools, capabilities, label }) =>
@@ -680,10 +686,10 @@ export class AgentContext {
     const directOnlyBoundary =
       directOnlyToolNames.length > 0
         ? `\nCall these tools directly; never list them in the \`tool_manifest\` or reference them inside ${programmaticRunnerNames}: ${directOnlyToolNames
-          .map((name) => `\`${name}\``)
-          .join(
-            ', '
-          )}. Every ${programmaticRunnerNames} call must include a \`tool_manifest\` containing the registered names or sandbox names used by its code; the manifest is validated before execution starts.`
+            .map((name) => `\`${name}\``)
+            .join(
+              ', '
+            )}. Every ${programmaticRunnerNames} call must include a \`tool_manifest\` containing the registered names or sandbox names used by its code; the manifest is validated before execution starts.`
         : '';
     const runtimes = new Set(
       programmaticTools.flatMap((tool) => tool.runtimes)
@@ -1061,45 +1067,47 @@ export class AgentContext {
         : 0;
     }
 
-    return markProviderTextInput(RunnableLambda.from((messages: BaseMessage[]) => {
-      const prefix: BaseMessage[] = systemMessage ? [systemMessage] : [];
+    return markProviderTextInput(
+      RunnableLambda.from((messages: BaseMessage[]) => {
+        const prefix: BaseMessage[] = systemMessage ? [systemMessage] : [];
 
-      // Build the non-system portion (summary + conversation), then apply
-      // cache markers separately so addCacheControl doesn't strip the
-      // SystemMessage's own cache_control breakpoint set above.
-      const hasSummaryBody =
-        this._summaryLocation === 'user_message' &&
-        this.summaryText != null &&
-        this.summaryText !== '';
+        // Build the non-system portion (summary + conversation), then apply
+        // cache markers separately so addCacheControl doesn't strip the
+        // SystemMessage's own cache_control breakpoint set above.
+        const hasSummaryBody =
+          this._summaryLocation === 'user_message' &&
+          this.summaryText != null &&
+          this.summaryText !== '';
 
-      const bodyWithSummary =
-        hasSummaryBody && promptCacheProvider == null
-          ? [this.buildSummaryHumanMessage(promptCacheProvider), ...messages]
-          : messages;
-      const dynamicTail = this.buildPromptCacheDynamicTail({
-        dynamicInstructions,
-        hasSummaryBody,
-        promptCacheProvider,
-        shouldMoveDynamicInstructions,
-      });
-      let body = this.buildBodyWithPromptCacheDynamicTail(
-        bodyWithSummary,
-        dynamicTail,
-        promptCacheProvider
-      );
-
-      if (
-        promptCacheProvider != null &&
-        dynamicTail.length === 0 &&
-        body.length >= 2
-      ) {
-        body = addTailCacheControl(
-          body,
-          this.getPromptCacheTtl(promptCacheProvider)
+        const bodyWithSummary =
+          hasSummaryBody && promptCacheProvider == null
+            ? [this.buildSummaryHumanMessage(promptCacheProvider), ...messages]
+            : messages;
+        const dynamicTail = this.buildPromptCacheDynamicTail({
+          dynamicInstructions,
+          hasSummaryBody,
+          promptCacheProvider,
+          shouldMoveDynamicInstructions,
+        });
+        let body = this.buildBodyWithPromptCacheDynamicTail(
+          bodyWithSummary,
+          dynamicTail,
+          promptCacheProvider
         );
-      }
-      return [...prefix, ...body];
-    })).withConfig({ runName: 'prompt' });
+
+        if (
+          promptCacheProvider != null &&
+          dynamicTail.length === 0 &&
+          body.length >= 2
+        ) {
+          body = addTailCacheControl(
+            body,
+            this.getPromptCacheTtl(promptCacheProvider)
+          );
+        }
+        return [...prefix, ...body];
+      })
+    ).withConfig({ runName: 'prompt' });
   }
 
   private buildSummaryHumanMessage(

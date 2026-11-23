@@ -37,8 +37,10 @@ function getSummaryText(summary: t.SummaryContentBlock | undefined): string {
 }
 
 const LOCAL_SUMMARY_CONFIG = {
-  prompt: 'Write one concise checkpoint with Goal, Progress, and Next Steps sections.',
-  updatePrompt: 'Merge the new messages into the existing checkpoint without duplicate sections.',
+  prompt:
+    'Write one concise checkpoint with Goal, Progress, and Next Steps sections.',
+  updatePrompt:
+    'Merge the new messages into the existing checkpoint without duplicate sections.',
   maxSummaryTokens: 128,
 } satisfies t.SummarizationConfig;
 
@@ -51,7 +53,7 @@ function createSpies(): {
   onRunStepSpy: jest.Mock;
   onSummarizeStartSpy: jest.Mock;
   onSummarizeCompleteSpy: jest.Mock;
-  } {
+} {
   return {
     onMessageDeltaSpy: jest.fn(),
     onRunStepSpy: jest.fn(),
@@ -69,23 +71,50 @@ function getSummarizationCompletionStats(data: t.ModelEndData): {
   outputTokens: number;
 } {
   const output = data?.output;
-  const reason = output?.response_metadata.stop_reason ?? output?.response_metadata.finish_reason;
-  const stopReason = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'pause_turn', 'refusal', 'stop', 'length', 'tool_calls', 'content_filter'].find((allowed) => allowed === reason) ?? 'unknown';
-  const allowedTypes = ['text', 'thinking', 'redacted_thinking', 'reasoning', 'tool_use'];
+  const reason =
+    output?.response_metadata.stop_reason ??
+    output?.response_metadata.finish_reason;
+  const stopReason =
+    [
+      'end_turn',
+      'max_tokens',
+      'stop_sequence',
+      'tool_use',
+      'pause_turn',
+      'refusal',
+      'stop',
+      'length',
+      'tool_calls',
+      'content_filter',
+    ].find((allowed) => allowed === reason) ?? 'unknown';
+  const allowedTypes = [
+    'text',
+    'thinking',
+    'redacted_thinking',
+    'reasoning',
+    'tool_use',
+  ];
   const blockTypes: Record<string, number> = {};
-  const content = typeof output?.content === 'string'
-    ? [{ type: 'text', text: output.content }]
-    : output?.content ?? [];
+  const content =
+    typeof output?.content === 'string'
+      ? [{ type: 'text', text: output.content }]
+      : (output?.content ?? []);
   let textCharacters = 0;
   for (const block of content) {
-    const type = allowedTypes.find((allowed) => allowed === block.type) ?? 'unknown';
+    const type =
+      allowedTypes.find((allowed) => allowed === block.type) ?? 'unknown';
     blockTypes[type] = (blockTypes[type] ?? 0) + 1;
-    if (type === 'text' && typeof block.text === 'string') textCharacters += block.text.length;
+    if (type === 'text' && typeof block.text === 'string')
+      textCharacters += block.text.length;
   }
   const tokens = (value: number | undefined): number =>
-    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+      ? value
+      : 0;
   return {
-    stopReason, blockTypes, textCharacters,
+    stopReason,
+    blockTypes,
+    textCharacters,
     toolCalls: Array.isArray(output?.tool_calls) ? output.tool_calls.length : 0,
     inputTokens: tokens(output?.usage_metadata?.input_tokens),
     outputTokens: tokens(output?.usage_metadata?.output_tokens),
@@ -101,10 +130,15 @@ function buildHandlers(
   return {
     [GraphEvents.TOOL_END]: new ToolEndHandler(),
     [GraphEvents.CHAT_MODEL_END]: {
-      handle: async (...args: Parameters<ModelEndHandler['handle']>): Promise<void> => {
+      handle: async (
+        ...args: Parameters<ModelEndHandler['handle']>
+      ): Promise<void> => {
         await eventModelEndHandler.handle(...args);
         if (args[2]?.summarization === true) {
-          console.log('  Summarization completion:', getSummarizationCompletionStats(args[1]));
+          console.log(
+            '  Summarization completion:',
+            getSummarizationCompletionStats(args[1])
+          );
         }
       },
     },
@@ -349,7 +383,9 @@ function addDeterministicSummarizationPressure(
   turns = 16
 ): void {
   const pressure =
-    'Verified compaction context: preserve calculation results, source identifiers, observations, and the next action for the continuing task. '.repeat(8);
+    'Verified compaction context: preserve calculation results, source identifiers, observations, and the next action for the continuing task. '.repeat(
+      8
+    );
   for (let turn = 0; turn < turns; turn++) {
     conversationHistory.push(
       new HumanMessage(`${label} exchange ${turn}: ${pressure}`),
@@ -400,37 +436,69 @@ describe('Summarization completion diagnostics (no API keys)', () => {
   test('logs only canonical stats and preserves the original usage handler', async () => {
     const privateValue = 'PRIVATE-CONTENT-NAME-REASON';
     const usage = { input_tokens: 12, output_tokens: 3, total_tokens: 15 };
-    const data: t.ModelEndData = { output: new AIMessageChunk({
-      content: [
-        { type: 'text', text: privateValue },
-        { type: 'thinking', thinking: privateValue },
-        { type: 'thinking', thinking: privateValue },
-        { type: privateValue, text: privateValue },
-      ],
-      tool_calls: [{ id: privateValue, name: privateValue, args: { privateValue } }],
-      response_metadata: { stop_reason: privateValue, privateValue },
-      usage_metadata: usage,
-    }) };
+    const data: t.ModelEndData = {
+      output: new AIMessageChunk({
+        content: [
+          { type: 'text', text: privateValue },
+          { type: 'thinking', thinking: privateValue },
+          { type: 'thinking', thinking: privateValue },
+          { type: privateValue, text: privateValue },
+        ],
+        tool_calls: [
+          { id: privateValue, name: privateValue, args: { privateValue } },
+        ],
+        response_metadata: { stop_reason: privateValue, privateValue },
+        usage_metadata: usage,
+      }),
+    };
     const collectedUsage: UsageMetadata[] = [];
-    const handler = buildHandlers(collectedUsage, createContentAggregator().aggregateContent, createSpies())[GraphEvents.CHAT_MODEL_END];
+    const handler = buildHandlers(
+      collectedUsage,
+      createContentAggregator().aggregateContent,
+      createSpies()
+    )[GraphEvents.CHAT_MODEL_END];
     const { Graph } = await Run.create<t.IState>({
       runId: 'safe-diagnostics',
-      graphConfig: { type: 'standard', llmConfig: {
-        provider: Providers.OPENAI, model: 'gpt-4o-mini', apiKey: 'offline-test-key',
-      } },
+      graphConfig: {
+        type: 'standard',
+        llmConfig: {
+          provider: Providers.OPENAI,
+          model: 'gpt-4o-mini',
+          apiKey: 'offline-test-key',
+        },
+      },
     });
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      await handler.handle(GraphEvents.CHAT_MODEL_END, data, { summarization: true, privateValue }, Graph);
+      await handler.handle(
+        GraphEvents.CHAT_MODEL_END,
+        data,
+        { summarization: true, privateValue },
+        Graph
+      );
       expect(collectedUsage[0]).toBe(usage);
-      expect(logSpy.mock.calls).toEqual([['  Summarization completion:', {
-        stopReason: 'unknown', blockTypes: { text: 1, thinking: 2, unknown: 1 },
-        textCharacters: privateValue.length, toolCalls: 1, inputTokens: 12, outputTokens: 3,
-      }]]);
+      expect(logSpy.mock.calls).toEqual([
+        [
+          '  Summarization completion:',
+          {
+            stopReason: 'unknown',
+            blockTypes: { text: 1, thinking: 2, unknown: 1 },
+            textCharacters: privateValue.length,
+            toolCalls: 1,
+            inputTokens: 12,
+            outputTokens: 3,
+          },
+        ],
+      ]);
       expect(JSON.stringify(logSpy.mock.calls)).not.toContain(privateValue);
       logSpy.mockClear();
       for (const summarization of [undefined, false, 'true', 1]) {
-        await handler.handle(GraphEvents.CHAT_MODEL_END, data, { summarization }, Graph);
+        await handler.handle(
+          GraphEvents.CHAT_MODEL_END,
+          data,
+          { summarization },
+          Graph
+        );
       }
       expect(logSpy).not.toHaveBeenCalled();
       expect(collectedUsage).toHaveLength(5);
@@ -440,17 +508,40 @@ describe('Summarization completion diagnostics (no API keys)', () => {
   });
 
   test('normalizes empty, text, stopped and invalid-token completions', () => {
-    const empty = { stopReason: 'unknown', blockTypes: {}, textCharacters: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0 };
+    const empty = {
+      stopReason: 'unknown',
+      blockTypes: {},
+      textCharacters: 0,
+      toolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    };
     expect(getSummarizationCompletionStats(undefined)).toEqual(empty);
     for (const tokens of [NaN, Infinity, -1, 1.5]) {
-      const output = new AIMessageChunk({ content: '', usage_metadata: {
-        input_tokens: tokens, output_tokens: tokens, total_tokens: tokens,
-      } });
-      expect(getSummarizationCompletionStats({ output })).toEqual({ ...empty, blockTypes: { text: 1 } });
+      const output = new AIMessageChunk({
+        content: '',
+        usage_metadata: {
+          input_tokens: tokens,
+          output_tokens: tokens,
+          total_tokens: tokens,
+        },
+      });
+      expect(getSummarizationCompletionStats({ output })).toEqual({
+        ...empty,
+        blockTypes: { text: 1 },
+      });
     }
     for (const key of ['stop_reason', 'finish_reason']) {
-      const output = new AIMessageChunk({ content: 'private', response_metadata: { [key]: 'max_tokens' } });
-      expect(getSummarizationCompletionStats({ output })).toEqual({ ...empty, stopReason: 'max_tokens', blockTypes: { text: 1 }, textCharacters: 7 });
+      const output = new AIMessageChunk({
+        content: 'private',
+        response_metadata: { [key]: 'max_tokens' },
+      });
+      expect(getSummarizationCompletionStats({ output })).toEqual({
+        ...empty,
+        stopReason: 'max_tokens',
+        blockTypes: { text: 1 },
+        textCharacters: 7,
+      });
     }
   });
 });
@@ -603,19 +694,15 @@ const hasAnthropic = hasEnv('ANTHROPIC_API_KEY');
         tokenCounter,
         indexTokenCountMap: buildIndexTokenCountMap(history, tokenCounter),
         fadingTier,
-        fadingTiers:
-          fadingTier == null ? undefined : { default: fadingTier },
+        fadingTiers: fadingTier == null ? undefined : { default: fadingTier },
         calibrationRatio,
       });
-      await run.processStream(
-        { messages: history },
-        {
-          configurable: { thread_id: run.id },
-          recursionLimit: 10,
-          streamMode: 'values',
-          version: 'v2',
-        } as any
-      );
+      await run.processStream({ messages: history }, {
+        configurable: { thread_id: run.id },
+        recursionLimit: 10,
+        streamMode: 'values',
+        version: 'v2',
+      } as any);
       expect(run.getRunMessages()?.length ?? 0).toBeGreaterThan(0);
       return run;
     };
@@ -680,7 +767,8 @@ const hasAnthropic = hasEnv('ANTHROPIC_API_KEY');
         spies,
         tokenCounter,
         indexTokenCountMap,
-        summaryPrompt: 'Write a concise checkpoint preserving the goal, verified calculations, tool results, exact identifiers, and next actions. Do not call tools, perform calculations, or continue the task. Summarize the existing transcript only.',
+        summaryPrompt:
+          'Write a concise checkpoint preserving the goal, verified calculations, tool results, exact identifiers, and next actions. Do not call tools, perform calculations, or continue the task. Summarize the existing transcript only.',
         summaryReserveRatio: 0.2,
       });
       return { run, contentParts };
@@ -690,7 +778,7 @@ const hasAnthropic = hasEnv('ANTHROPIC_API_KEY');
     let { run, contentParts } = await createRun();
     await runTurn(
       { run, conversationHistory },
-      'Hi! Let\'s do some math. What is 12345 * 6789? Use the calculator please.',
+      "Hi! Let's do some math. What is 12345 * 6789? Use the calculator please.",
       streamConfig
     );
     logTurn('T1', conversationHistory, `parts=${contentParts.length}`);
@@ -1101,7 +1189,8 @@ const hasAnthropic = hasEnv('ANTHROPIC_API_KEY');
         spies,
         tokenCounter,
         indexTokenCountMap,
-        summaryPrompt: 'Write a concise checkpoint preserving the goal, verified calculations, tool results, exact identifiers, and next actions. Do not call tools, perform calculations, or continue the task. Summarize the existing transcript only.',
+        summaryPrompt:
+          'Write a concise checkpoint preserving the goal, verified calculations, tool results, exact identifiers, and next actions. Do not call tools, perform calculations, or continue the task. Summarize the existing transcript only.',
         summaryReserveRatio: 0.2,
         maxSummaryTokens: 2048,
         llmConfigOverride: {
@@ -1164,11 +1253,7 @@ const hasAnthropic = hasEnv('ANTHROPIC_API_KEY');
       'What is 2 * 512? Use the calculator.',
       streamConfig
     );
-    logTurn(
-      'T4-think',
-      conversationHistory,
-      `parts=${contentParts.length}`
-    );
+    logTurn('T4-think', conversationHistory, `parts=${contentParts.length}`);
 
     // Turn 5: tighter context to trigger summarization
     if (spies.onSummarizeStartSpy.mock.calls.length === 0) {
@@ -1178,11 +1263,7 @@ const hasAnthropic = hasEnv('ANTHROPIC_API_KEY');
         'What is 999 * 999? Use the calculator.',
         streamConfig
       );
-      logTurn(
-        'T5-think',
-        conversationHistory,
-        `parts=${contentParts.length}`
-      );
+      logTurn('T5-think', conversationHistory, `parts=${contentParts.length}`);
     }
 
     // Provider output length varies, so add deterministic history rather than
@@ -1198,11 +1279,7 @@ const hasAnthropic = hasEnv('ANTHROPIC_API_KEY');
         'What is 42 * 42? Use the calculator.',
         streamConfig
       );
-      logTurn(
-        'T6-think',
-        conversationHistory,
-        `parts=${contentParts.length}`
-      );
+      logTurn('T6-think', conversationHistory, `parts=${contentParts.length}`);
     }
 
     console.log(
@@ -2347,7 +2424,11 @@ describe('Tight context with oversized tool results (no API keys)', () => {
     );
 
     // Force first summarization
-    addDeterministicSummarizationPressure(conversationHistory, 'structured-checkpoint', 4);
+    addDeterministicSummarizationPressure(
+      conversationHistory,
+      'structured-checkpoint',
+      4
+    );
     run = await createRunHelper(1024);
     run.Graph?.overrideTestModel(['Continuing after summary.'], 1);
     try {
@@ -2372,7 +2453,11 @@ describe('Tight context with oversized tool results (no API keys)', () => {
     );
 
     // Force second summarization
-    addDeterministicSummarizationPressure(conversationHistory, 'structured-checkpoint', 4);
+    addDeterministicSummarizationPressure(
+      conversationHistory,
+      'structured-checkpoint',
+      4
+    );
     run = await createRunHelper(1024);
     run.Graph?.overrideTestModel(['Continuing after second summary.'], 1);
     try {
@@ -2436,9 +2521,16 @@ describe('Tight context with oversized tool results (no API keys)', () => {
               capturedInstructions.push(
                 typeof content === 'string' ? content : JSON.stringify(content)
               );
-              capturedPrefixes.push(messages.slice(0, -1).map(message =>
-                typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
-              ).join(''));
+              capturedPrefixes.push(
+                messages
+                  .slice(0, -1)
+                  .map((message) =>
+                    typeof message.content === 'string'
+                      ? message.content
+                      : JSON.stringify(message.content)
+                  )
+                  .join('')
+              );
               yield* super._streamResponseChunks(messages, options, runManager);
             }
           } as any;
@@ -2524,7 +2616,11 @@ describe('Tight context with oversized tool results (no API keys)', () => {
     );
 
     // Force first summarization
-    addDeterministicSummarizationPressure(conversationHistory, 'update-checkpoint', 4);
+    addDeterministicSummarizationPressure(
+      conversationHistory,
+      'update-checkpoint',
+      4
+    );
     run = await createRunHelper(1024);
     run.Graph?.overrideTestModel(['Continuing after first summary.'], 1);
     try {
@@ -2577,7 +2673,11 @@ describe('Tight context with oversized tool results (no API keys)', () => {
     );
 
     // Force second summarization (with prior summary in AgentContext)
-    addDeterministicSummarizationPressure(conversationHistory, 'update-checkpoint', 4);
+    addDeterministicSummarizationPressure(
+      conversationHistory,
+      'update-checkpoint',
+      4
+    );
     run = await createRunHelper(1024, priorSummary);
     run.Graph?.overrideTestModel(['Continuing after second summary.'], 1);
     try {
@@ -2591,13 +2691,16 @@ describe('Tight context with oversized tool results (no API keys)', () => {
     expect(secondSumCount).toBeGreaterThan(0);
     expect(capturedInstructions.length).toBeGreaterThan(0);
     for (const instruction of capturedInstructions) {
-      expect(instruction.startsWith(LOCAL_SUMMARY_CONFIG.updatePrompt)).toBe(true);
+      expect(instruction.startsWith(LOCAL_SUMMARY_CONFIG.updatePrompt)).toBe(
+        true
+      );
       expect(instruction).toContain('<previous-summary>');
       expect(instruction).not.toContain(priorSummary.text);
       expect(instruction).toContain('already present in the request prefix');
     }
     expect(capturedPrefixes).toHaveLength(capturedInstructions.length);
-    for (const prefix of capturedPrefixes) expect(prefix).toContain(priorSummary.text);
+    for (const prefix of capturedPrefixes)
+      expect(prefix).toContain(priorSummary.text);
   });
 
   test('empty pruning context after summarization preserves latest user turn', async () => {
@@ -2750,7 +2853,8 @@ const hasAnyApiKey = hasAnyEnv(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']);
         spies,
         tokenCounter,
         indexTokenCountMap,
-        summaryPrompt: 'Write a concise checkpoint preserving the goal, verified calculations, tool results, exact identifiers, and next actions. Do not call tools, perform calculations, or continue the task. Summarize the existing transcript only.',
+        summaryPrompt:
+          'Write a concise checkpoint preserving the goal, verified calculations, tool results, exact identifiers, and next actions. Do not call tools, perform calculations, or continue the task. Summarize the existing transcript only.',
         summaryReserveRatio: 0.2,
         maxSummaryTokens: 300,
         tools: [],
@@ -3078,7 +3182,11 @@ describe('Enrichment and prompt selection (no API keys)', () => {
 
     // Build conversation with a tool failure
     const conversationHistory: BaseMessage[] = [];
-    addDeterministicSummarizationPressure(conversationHistory, 'tool-failure', 4);
+    addDeterministicSummarizationPressure(
+      conversationHistory,
+      'tool-failure',
+      4
+    );
     conversationHistory.push(
       new HumanMessage('Run the linter on my code.'),
       new AIMessage({
@@ -3353,7 +3461,11 @@ describe('Summarization deduplication correctness (no API keys)', () => {
     );
 
     // Now force summarization with tight context
-    addDeterministicSummarizationPressure(conversationHistory, 'dedup-checkpoint', 4);
+    addDeterministicSummarizationPressure(
+      conversationHistory,
+      'dedup-checkpoint',
+      4
+    );
     run = await createRunHelper(1024);
     run.Graph?.overrideTestModel(['Continuing after summary.'], 1);
     try {
@@ -3479,7 +3591,11 @@ describe('Summarization deduplication correctness (no API keys)', () => {
     run.Graph?.overrideTestModel(['Answer 2 with more explanation.'], 1);
     await runTurn({ run, conversationHistory }, 'Question 2.', streamConfig);
 
-    addDeterministicSummarizationPressure(conversationHistory, 'repeat-checkpoint', 4);
+    addDeterministicSummarizationPressure(
+      conversationHistory,
+      'repeat-checkpoint',
+      4
+    );
     run = await createRunHelper(1024);
     run.Graph?.overrideTestModel(['OK.'], 1);
     try {
@@ -3512,7 +3628,11 @@ describe('Summarization deduplication correctness (no API keys)', () => {
       streamConfig
     );
 
-    addDeterministicSummarizationPressure(conversationHistory, 'repeat-checkpoint', 4);
+    addDeterministicSummarizationPressure(
+      conversationHistory,
+      'repeat-checkpoint',
+      4
+    );
     run = await createRunHelper(1024, priorSummary);
     run.Graph?.overrideTestModel(['OK cycle 2.'], 1);
     try {
@@ -3620,7 +3740,11 @@ describe('Summarization deduplication correctness (no API keys)', () => {
     }
 
     // Trigger summarization
-    addDeterministicSummarizationPressure(conversationHistory, 'continue-checkpoint', 4);
+    addDeterministicSummarizationPressure(
+      conversationHistory,
+      'continue-checkpoint',
+      4
+    );
     let run = await createRunHelper(1024);
     run.Graph?.overrideTestModel(['Summary acknowledged.'], 1);
     try {

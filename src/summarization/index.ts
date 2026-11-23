@@ -8,6 +8,7 @@ import type { SummarizationTrigger } from '@/types';
 export {
   buildSummarizationInstruction,
   buildSummaryCarrierText,
+  isMetadataSummaryStub,
   separateSummarizationParameters,
   ManualSummarizationSkippedError,
 } from './shared';
@@ -48,6 +49,7 @@ function warnUnrecognizedTriggerType(type: string): void {
     }
   }
   warnedUnrecognizedTriggerTypes.add(type);
+  // eslint-disable-next-line no-console -- Keep the configuration warning visible without requiring a caller-provided logger.
   console.warn(
     `[shouldTriggerSummarization] Unrecognized trigger.type: "${type}". ` +
       `Summarization will not fire. Valid values: ${VALID_TRIGGER_TYPES.join(', ')}.`

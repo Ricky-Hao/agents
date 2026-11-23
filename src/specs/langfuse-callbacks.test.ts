@@ -1636,9 +1636,9 @@ describe('Langfuse callback composition', () => {
         ...(writes != null
           ? { input_cache_creation: writes }
           : {
-            input_cache_creation_30m: halfHour,
-            input_cache_creation_12h: twelveHour,
-          }),
+              input_cache_creation_30m: halfHour,
+              input_cache_creation_12h: twelveHour,
+            }),
       });
       expect(output.generations[0][0]).toBe(generation);
       expect(message.content).toBe('hello');

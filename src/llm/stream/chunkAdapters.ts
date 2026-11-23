@@ -295,7 +295,7 @@ export async function* smoothGenerationChunks({
 }): AsyncGenerator<ChatGenerationChunk> {
   const source = (async function* (): AsyncGenerator<
     SmoothItem<ChatGenerationChunk>
-    > {
+  > {
     for await (const chunk of chunks) {
       yield toGenerationSmoothItem(chunk, getReasoningKwargsText);
     }

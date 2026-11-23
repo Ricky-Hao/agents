@@ -40,6 +40,7 @@ import {
 import {
   Callback,
   GraphEvents,
+  Providers,
   TitleMethod,
   ACTIVITY_LABEL_RUN_NAME,
   REASONING_LABEL_RUN_NAME,
@@ -55,6 +56,7 @@ import {
   disposeLangfuseHandler,
   getLangfuseTraceName,
   isLangfuseCallbackHandler,
+  shouldCreateLangfuseHandler,
   withLangfuseAttributes,
 } from '@/langfuse';
 import {
@@ -119,6 +121,7 @@ import { seedRunInitialSessions } from '@/utils/toolSessions';
 import { getTraceIdSeed } from '@/langfuseRuntimeContext';
 import { resolveClientOptionsModel } from '@/llm/request';
 import { HandoffLimitError } from '@/graphs/handoff';
+import { ToolImageRead, READ_IMAGE_TOOL } from '@/tools/imageRead';
 import { createGraph } from '@/graphs/createGraph';
 import { isFadingTier } from '@/messages/fading';
 import { resolveMaxSeals } from '@/llm/preempt';
@@ -396,9 +399,13 @@ async function resolveCompletedSegmentConfig(
   );
 }
 
-function getFirstPersistedInterrupt(
-  snapshot: InterruptStateSnapshot
-): { id: string; value: unknown; pending: Array<{ id: string; value: unknown }> } | undefined {
+function getFirstPersistedInterrupt(snapshot: InterruptStateSnapshot):
+  | {
+      id: string;
+      value: unknown;
+      pending: Array<{ id: string; value: unknown }>;
+    }
+  | undefined {
   const pending: Array<{ id: string; value: unknown }> = [];
   const nestedStates: InterruptStateSnapshot[] = [];
   const next = snapshot.next == null ? undefined : new Set(snapshot.next);
@@ -410,7 +417,11 @@ function getFirstPersistedInterrupt(
       }
     }
     const nestedState = task.state;
-    if (nestedState != null && 'tasks' in nestedState && Array.isArray(nestedState.tasks)) {
+    if (
+      nestedState != null &&
+      'tasks' in nestedState &&
+      Array.isArray(nestedState.tasks)
+    ) {
       nestedStates.push(nestedState);
     }
   }
@@ -418,7 +429,9 @@ function getFirstPersistedInterrupt(
     const nested = getFirstPersistedInterrupt(nestedState);
     if (nested != null) pending.push(...nested.pending);
   }
-  const unique = [...new Map(pending.map((entry) => [entry.id, entry])).values()];
+  const unique = [
+    ...new Map(pending.map((entry) => [entry.id, entry])).values(),
+  ];
   return unique.length === 0 ? undefined : { ...unique[0], pending: unique };
 }
 
@@ -441,9 +454,9 @@ function overwriteResumeRunStepState(
   const overwrite = new Overwrite(state);
   const update = Array.isArray(command.update)
     ? [
-      ...command.update.filter(([key]) => key !== 'runStepState'),
+        ...command.update.filter(([key]) => key !== 'runStepState'),
         ['runStepState', overwrite] as [string, unknown],
-    ]
+      ]
     : { ...(command.update ?? {}), runStepState: overwrite };
   return copyResumeCommand(command, { update });
 }
@@ -578,7 +591,9 @@ export class Run<_T extends t.BaseGraphState> {
       (config.clientDelegatedToolNames?.length ?? 0) > 0 &&
       handlerRegistry.getHandler(GraphEvents.ON_MODEL_RESPONSE) == null
     ) {
-      throw new Error('Client tool delegation requires an accepted-result handler');
+      throw new Error(
+        'Client tool delegation requires an accepted-result handler'
+      );
     }
     this.handlerRegistry = handlerRegistry;
     this.hookRegistry = config.hooks;
@@ -604,14 +619,19 @@ export class Run<_T extends t.BaseGraphState> {
     if (!config.graphConfig) {
       throw new Error('Graph config not provided');
     }
-    if ('providerTextProtection' in config.graphConfig &&
-        config.graphConfig.providerTextProtection != null) {
+    if (
+      'providerTextProtection' in config.graphConfig &&
+      config.graphConfig.providerTextProtection != null
+    ) {
       throw new ProviderTextProtectionError('incompatible');
     }
 
     /** Handle different graph types */
     if (config.graphConfig.type === 'multi-agent') {
-      if (this.clientDelegatedToolNames != null && this.clientDelegatedToolNames.length > 0) {
+      if (
+        this.clientDelegatedToolNames != null &&
+        this.clientDelegatedToolNames.length > 0
+      ) {
         throw new Error('Client tool delegation requires a single-agent graph');
       }
       this.graphRunnable = this.createMultiAgentGraph(config.graphConfig);
@@ -620,7 +640,10 @@ export class Run<_T extends t.BaseGraphState> {
       }
     } else {
       /** Default to legacy graph for 'standard' or undefined type */
-      this.graphRunnable = this.createLegacyGraph(config.graphConfig);
+      this.graphRunnable = this.createLegacyGraph(
+        config.graphConfig,
+        config.isTrustedToolImage
+      );
       if (this.Graph) {
         this.Graph.handlerRegistry = handlerRegistry;
       }
@@ -653,7 +676,8 @@ export class Run<_T extends t.BaseGraphState> {
   }
 
   private createLegacyGraph(
-    config: t.LegacyGraphConfig | t.StandardGraphConfig
+    config: t.LegacyGraphConfig | t.StandardGraphConfig,
+    isTrustedToolImage?: t.RunConfig['isTrustedToolImage']
   ): t.CompiledStateWorkflow {
     let agentConfig: t.AgentInputs;
     let signal: AbortSignal | undefined;
@@ -686,6 +710,41 @@ export class Run<_T extends t.BaseGraphState> {
       signal = legacySignal;
     }
 
+    const clientOptions = agentConfig.clientOptions as
+      | (t.OpenAIClientOptions & t.LLMConfig)
+      | undefined;
+    const imageRead =
+      isTrustedToolImage != null &&
+      agentConfig.provider === Providers.OPENAI &&
+      clientOptions?.useResponsesApi === true &&
+      clientOptions.modelKwargs?.previous_response_id == null &&
+      (clientOptions.fallbacks?.length ?? 0) === 0 &&
+      config.compileOptions?.checkpointer == null &&
+      this.humanInTheLoop?.enabled !== true &&
+      (this.clientDelegatedToolNames?.length ?? 0) === 0 &&
+      !['LANGSMITH_TRACING_V2', 'LANGCHAIN_TRACING_V2', 'LANGSMITH_TRACING', 'LANGCHAIN_TRACING'].some(
+        (key) => process.env[key]?.toLowerCase() === 'true'
+      ) &&
+      !shouldCreateLangfuseHandler(
+        resolveLangfuseConfig(this.langfuse, agentConfig.langfuse)
+      ) &&
+      ![
+        ...(agentConfig.toolDefinitions ?? []),
+        ...(agentConfig.tools ?? []),
+        ...(agentConfig.graphTools ?? []),
+      ].some((tool) => 'name' in tool && tool.name === READ_IMAGE_TOOL)
+        ? new ToolImageRead(isTrustedToolImage)
+        : undefined;
+    if (imageRead != null) {
+      // GenericTool's StructuredToolInterface type only models Zod schemas.
+      // The graph's schema conversion and ToolNode also handle JSON schema tools.
+      const tool = imageRead.tool as unknown as t.GenericTool;
+      agentConfig = {
+        ...agentConfig,
+        graphTools: [...(agentConfig.graphTools ?? []), tool],
+      };
+    }
+
     const standardGraph = createGraph({
       kind: 'standard',
       input: {
@@ -709,6 +768,7 @@ export class Run<_T extends t.BaseGraphState> {
         clientDelegatedToolNames: this.clientDelegatedToolNames,
       },
     });
+    standardGraph.imageRead = imageRead;
     /** Propagate compile options from graph config */
     standardGraph.compileOptions = this.applyHITLCheckpointerFallback(
       config.compileOptions
@@ -1108,7 +1168,8 @@ export class Run<_T extends t.BaseGraphState> {
       if (
         eventName === GraphEvents.ON_MODEL_RESPONSE ||
         eventName === GraphEvents.ON_MODEL_TOOLS_CLAIMED
-      ) return;
+      )
+        return;
       const handler = this.handlerRegistry?.getHandler(eventName);
       /**
        * Tool completions arriving over the custom-event channel are the only
@@ -1304,6 +1365,7 @@ export class Run<_T extends t.BaseGraphState> {
      * instead of `inputs.messages`.
      */
     const isResume = inputs instanceof Command;
+    if (isResume) graph.imageRead?.end();
     if (!isResume) {
       graph.startFreshLangfuseExecution();
     }
@@ -1410,11 +1472,11 @@ export class Run<_T extends t.BaseGraphState> {
         checkpointThreadId == null
           ? undefined
           : JSON.stringify([
-            checkpointThreadId,
-            checkpointNamespace,
-            checkpointId,
-            checkpointId === '' ? 0 : ++this.checkpointForkSeq,
-          ]);
+              checkpointThreadId,
+              checkpointNamespace,
+              checkpointId,
+              checkpointId === '' ? 0 : ++this.checkpointForkSeq,
+            ]);
       graph.resetValues(streamOptions?.keepContent, checkpointScope);
       graph.handoffRouting?.start();
       graph.startStopContinuationExecution(nanoid());
@@ -1599,18 +1661,20 @@ export class Run<_T extends t.BaseGraphState> {
             continue;
           }
 
-          if (
-            data.chunk != null &&
-            isInterrupted<unknown>(data.chunk)
-          ) {
+          if (data.chunk != null && isInterrupted<unknown>(data.chunk)) {
             const interrupts = data.chunk[INTERRUPT];
             if (interrupts.length > 0) {
               const pending = new Map(
-                (this._interrupt?.pendingInterrupts ?? []).map((entry) => [entry.interruptId, entry])
+                (this._interrupt?.pendingInterrupts ?? []).map((entry) => [
+                  entry.interruptId,
+                  entry,
+                ])
               );
-              for (const entry of interrupts) pending.set(entry.id ?? '', {
-                interruptId: entry.id ?? '', payload: entry.value,
-              });
+              for (const entry of interrupts)
+                pending.set(entry.id ?? '', {
+                  interruptId: entry.id ?? '',
+                  payload: entry.value,
+                });
               const first = this._interrupt ?? {
                 interruptId: interrupts[0].id ?? '',
                 payload: cloneToolApprovalInterruptPayload(interrupts[0].value),
@@ -1628,7 +1692,8 @@ export class Run<_T extends t.BaseGraphState> {
           if (
             eventName === GraphEvents.ON_MODEL_RESPONSE ||
             eventName === GraphEvents.ON_MODEL_TOOLS_CLAIMED
-          ) continue;
+          )
+            continue;
           const handler = this.handlerRegistry?.getHandler(eventName);
           if (handler) {
             await handler.handle(eventName, data, metadata, this.Graph);
@@ -1750,11 +1815,11 @@ export class Run<_T extends t.BaseGraphState> {
             }
             const completedSegmentConfig = this.hasCheckpointer
               ? await resolveCompletedSegmentConfig(
-                graphRunnable,
-                streamConfig,
-                graph.getStopContinuationExecutionId(),
-                graph.getStreamSegment()
-              )
+                  graphRunnable,
+                  streamConfig,
+                  graph.getStopContinuationExecutionId(),
+                  graph.getStreamSegment()
+                )
               : streamConfig;
             const nextContinuationCount = stopContinuationCount + 1;
             graph.setStopContinuationCount(nextContinuationCount);
@@ -1789,6 +1854,7 @@ export class Run<_T extends t.BaseGraphState> {
     };
 
     try {
+      if (!isResume) graph.imageRead?.start();
       // When opted in, seed the root trace id from this run's id so feedback /
       // other external signals can be attached to the trace later without a
       // lookup (see SeededTraceIdGenerator in ./instrumentation).
@@ -1842,6 +1908,7 @@ export class Run<_T extends t.BaseGraphState> {
       }
       throw err;
     } finally {
+      graph.imageRead?.end();
       /**
        * Preserve session-scoped hooks when the run paused on a HITL
        * interrupt — the very next call will be `Run.resume()`, which
@@ -1974,11 +2041,13 @@ export class Run<_T extends t.BaseGraphState> {
   private getPendingInterruptState(): {
     pending: NonNullable<t.RunInterruptResult<unknown>['pendingInterrupts']>;
     ids: Set<string>;
-    } {
-    const roots = this._interrupt?.pendingInterrupts ??
+  } {
+    const roots =
+      this._interrupt?.pendingInterrupts ??
       (this._interrupt == null ? [] : [this._interrupt]);
     const pending = new Map<
-      string, Pick<t.RunInterruptResult<unknown>, 'interruptId' | 'payload'>
+      string,
+      Pick<t.RunInterruptResult<unknown>, 'interruptId' | 'payload'>
     >();
     const ids = new Set<string>();
     const executions: SubagentResumeManifest['executions'] = [];
@@ -2038,7 +2107,9 @@ export class Run<_T extends t.BaseGraphState> {
       ),
       pendingInterrupts: pending.map((pending) => ({
         interruptId: pending.interruptId,
-        payload: cloneToolApprovalInterruptPayload(getPublicToolInterruptPayload(pending.payload)),
+        payload: cloneToolApprovalInterruptPayload(
+          getPublicToolInterruptPayload(pending.payload)
+        ),
       })),
     } as t.RunInterruptResult<TPayload>;
   }
@@ -2186,14 +2257,20 @@ export class Run<_T extends t.BaseGraphState> {
       );
       return;
     }
-    const addressed = new Set(pending.flatMap((entry) =>
-      resumeValue != null && typeof resumeValue === 'object' &&
+    const addressed = new Set(
+      pending.flatMap((entry) =>
+        resumeValue != null &&
+        typeof resumeValue === 'object' &&
         Object.prototype.hasOwnProperty.call(resumeValue, entry.interruptId)
-        ? [entry.interruptId] : []
-    ));
-    if (addressed.size === 0 && interrupt != null) addressed.add(interrupt.interruptId);
+          ? [entry.interruptId]
+          : []
+      )
+    );
+    if (addressed.size === 0 && interrupt != null)
+      addressed.add(interrupt.interruptId);
     const scope = getToolBatchReplayScope({ configurable }) ?? '';
-    const thread = typeof configurable.thread_id === 'string' ? configurable.thread_id : '';
+    const thread =
+      typeof configurable.thread_id === 'string' ? configurable.thread_id : '';
     restoreToolReplayConfigs(
       configurable,
       pending.map((entry) => ({ id: entry.interruptId, value: entry.payload })),
@@ -2259,14 +2336,19 @@ export class Run<_T extends t.BaseGraphState> {
         .map((entry) => getInterruptHookSessionId(entry.payload))
         .filter((id): id is string => id != null)
     );
-    for (const hookSessionId of hookSessions) this.hookRegistry?.copySession(hookSessionId, this.id);
+    for (const hookSessionId of hookSessions)
+      this.hookRegistry?.copySession(hookSessionId, this.id);
     const interruptId = interrupt?.interruptId;
     const workflow = this.graphRunnable as
       | (t.CompiledStateWorkflow & WorkflowWithStateHistory)
       | undefined;
     const stateHistory = workflow?.getStateHistory;
     if (interrupt?.checkpointId != null && interrupt.checkpointId.length > 0) {
-      return this.selectInterruptCheckpoint(manifestConfig, interrupt.checkpointId, interrupt.checkpointNs);
+      return this.selectInterruptCheckpoint(
+        manifestConfig,
+        interrupt.checkpointId,
+        interrupt.checkpointNs
+      );
     }
     if (
       interrupt == null ||
@@ -2357,7 +2439,10 @@ export class Run<_T extends t.BaseGraphState> {
     this._interrupt = {
       interruptId: persistedInterrupt.id,
       payload: cloneToolApprovalInterruptPayload(persistedInterrupt.value),
-      pendingInterrupts: persistedInterrupt.pending.map((entry) => ({ interruptId: entry.id, payload: entry.value })),
+      pendingInterrupts: persistedInterrupt.pending.map((entry) => ({
+        interruptId: entry.id,
+        payload: entry.value,
+      })),
       ...(typeof threadId === 'string' ? { threadId } : {}),
       ...(typeof checkpointId === 'string' ? { checkpointId } : {}),
       ...(typeof checkpointNs === 'string' ? { checkpointNs } : {}),
@@ -3103,9 +3188,9 @@ export class Run<_T extends t.BaseGraphState> {
       reasoningContext?.langfuse
     )
       ? resolveToolOutputTracingConfig(
-        this.langfuse,
-        reasoningContext?.langfuse
-      )
+          this.langfuse,
+          reasoningContext?.langfuse
+        )
       : undefined;
     const reasoningEvidence = {
       visibleReasoning,
@@ -3281,9 +3366,9 @@ export class Run<_T extends t.BaseGraphState> {
       !hasUnattributedActivity &&
       !hasOmittedActivitiesWithoutAgentIds
         ? contributingAgentIds.flatMap((agentId) => {
-          const context = agentContexts?.get(agentId);
-          return context == null ? [] : [context];
-        })
+            const context = agentContexts?.get(agentId);
+            return context == null ? [] : [context];
+          })
         : Array.from(agentContexts?.values() ?? []);
     for (const context of redactionContexts) {
       if (!hasToolOutputTracingConfig(this.langfuse, context.langfuse)) {

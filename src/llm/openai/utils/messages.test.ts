@@ -3,7 +3,10 @@ import {
   _convertMessagesToOpenAIParams,
   _convertMessagesToOpenAIResponsesParams,
 } from './index';
-import { calculateMaxToolCallInputChars, HARD_MAX_TOOL_RESULT_CHARS } from '@/utils/truncation';
+import {
+  calculateMaxToolCallInputChars,
+  HARD_MAX_TOOL_RESULT_CHARS,
+} from '@/utils/truncation';
 
 describe('Responses reasoning summaries', () => {
   it.each([

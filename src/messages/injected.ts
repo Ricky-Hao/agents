@@ -3,6 +3,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { InjectedMessage } from '@/types/tools';
 import { setProviderMessageProvenance } from './provenance';
+import { buildSkillCarrierText } from './skillCarrier';
 import { toLangChainContent } from './langchain';
 import { ContentTypes } from '@/common';
 
@@ -70,9 +71,16 @@ export function convertInjectedMessages(
     if (msg.isMeta != null) additional_kwargs.isMeta = msg.isMeta;
     if (msg.source != null) additional_kwargs.source = msg.source;
     if (msg.skillName != null) additional_kwargs.skillName = msg.skillName;
+    if (msg.skillId != null) additional_kwargs.skillId = msg.skillId;
+    if (msg.skillVersion != null)
+      additional_kwargs.skillVersion = msg.skillVersion;
 
     const message = new HumanMessage({
-      content: toLangChainContent(msg.content),
+      content: toLangChainContent(
+        msg.source === 'skill' && typeof msg.content === 'string'
+          ? buildSkillCarrierText(msg.content, msg)
+          : msg.content
+      ),
       additional_kwargs,
     });
     setProviderMessageProvenance(message, [

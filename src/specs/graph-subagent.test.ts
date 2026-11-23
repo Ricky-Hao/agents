@@ -176,8 +176,17 @@ describe('Graph subagent integration', () => {
     const prompt = jest.fn(() => 'Synthesize the result.');
     config.edges[1].prompt = prompt;
     const run = await createRun(config);
-    run.Graph?.setSubagentModelOverride(createFakeStreamingLLM({ responses: ['plan', 'left work', 'right work', 'team answer'] }));
-    expect(await getGraphSubagentTool(run).invoke({ description: 'Complete the team.', subagent_type: config.type }, invokeConfig)).toBe('team answer');
+    run.Graph?.setSubagentModelOverride(
+      createFakeStreamingLLM({
+        responses: ['plan', 'left work', 'right work', 'team answer'],
+      })
+    );
+    expect(
+      await getGraphSubagentTool(run).invoke(
+        { description: 'Complete the team.', subagent_type: config.type },
+        invokeConfig
+      )
+    ).toBe('team answer');
     expect(prompt).toHaveBeenCalledTimes(1);
   });
 

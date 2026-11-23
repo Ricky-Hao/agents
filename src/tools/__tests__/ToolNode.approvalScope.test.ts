@@ -94,33 +94,31 @@ function createHarness(
               completed >= cycles
                 ? 'done'
                 : {
-                  content: '',
-                  tool_calls: [
-                    ...(completedSibling
-                      ? [
-                        {
-                          id: `${runId}-sibling-${completed}`,
-                          name: 'sibling',
-                          args: { value: `${runId}-sibling-${completed}` },
-                        },
-                      ]
-                      : []),
-                    {
-                      id: `${runId}-${completed}`,
-                      name: 'echo',
-                      args: { value: `${runId}-${completed}` },
-                    },
-                  ],
-                }
+                    content: '',
+                    tool_calls: [
+                      ...(completedSibling
+                        ? [
+                            {
+                              id: `${runId}-sibling-${completed}`,
+                              name: 'sibling',
+                              args: { value: `${runId}-sibling-${completed}` },
+                            },
+                          ]
+                        : []),
+                      {
+                        id: `${runId}-${completed}`,
+                        name: 'echo',
+                        args: { value: `${runId}-${completed}` },
+                      },
+                    ],
+                  }
             ),
           ],
         };
       })
       .addNode('tools', async (state, config) => {
         namespaces.push(String(config.configurable?.checkpoint_ns));
-        if (
-          config.configurable?.[TOOL_APPROVAL_REVIEW_CONFIG_KEY] != null
-        ) {
+        if (config.configurable?.[TOOL_APPROVAL_REVIEW_CONFIG_KEY] != null) {
           resumeInternals.push({
             resumeMap: Object.prototype.hasOwnProperty.call(
               config.configurable,
@@ -133,8 +131,10 @@ function createHarness(
           });
         }
         const configurable = { ...carriedConfigurable, ...config.configurable };
-        if (configurable[TOOL_APPROVAL_REVIEW_CONFIG_KEY] != null &&
-          resumeInternalMode !== 'supported') {
+        if (
+          configurable[TOOL_APPROVAL_REVIEW_CONFIG_KEY] != null &&
+          resumeInternalMode !== 'supported'
+        ) {
           if (resumeInternalMode === 'missing') {
             delete configurable.__pregel_resume_map;
             delete configurable.__pregel_scratchpad;
@@ -190,7 +190,10 @@ function createHarness(
   return { createRun, executions, namespaces, resumeInternals };
 }
 
-function config(scope?: string, userId = 'user-a'): RunnableConfig & { version: 'v2' } {
+function config(
+  scope?: string,
+  userId = 'user-a'
+): RunnableConfig & { version: 'v2' } {
   return {
     configurable: {
       user_id: userId,
@@ -249,25 +252,31 @@ describe('approval execution scope', () => {
 
     await run.resume([{ type: 'approve' }], runConfig);
     expect(executions).toEqual(['run-1-sibling-0', 'run-1-0']);
-    expect(resumeInternals).toEqual([
-      { resumeMap: true, scratchpad: true },
-    ]);
+    expect(resumeInternals).toEqual([{ resumeMap: true, scratchpad: true }]);
     expect(run.getInterrupt()).toBeUndefined();
   });
 
   it.each(['missing', 'mismatched'] as const)(
     'fails closed without replaying a completed mutation when resume internals are %s',
     async (resumeInternalMode) => {
-      const { createRun, executions } = createHarness(false, false, true, resumeInternalMode);
+      const { createRun, executions } = createHarness(
+        false,
+        false,
+        true,
+        resumeInternalMode
+      );
       const runId = `changed-internals-${resumeInternalMode}`;
       const run = await createRun('a', runId);
       const runConfig = config(runId);
-      await run.processStream({ messages: [new HumanMessage('start')] }, runConfig);
+      await run.processStream(
+        { messages: [new HumanMessage('start')] },
+        runConfig
+      );
       expect(executions).toEqual([`${runId}-sibling-0`]);
 
-      await expect(run.resume([{ type: 'approve' }], runConfig)).rejects.toThrow(
-        'Cannot verify the active tool approval resume'
-      );
+      await expect(
+        run.resume([{ type: 'approve' }], runConfig)
+      ).rejects.toThrow('Cannot verify the active tool approval resume');
       expect(executions).toEqual([`${runId}-sibling-0`]);
     }
   );
@@ -276,9 +285,14 @@ describe('approval execution scope', () => {
     const { createRun, executions } = createHarness(true, false, true);
     const run = await createRun('a', 'two-cycle-replay', 4);
     const runConfig = config('two-cycle-replay');
-    await run.processStream({ messages: [new HumanMessage('start')] }, runConfig);
+    await run.processStream(
+      { messages: [new HumanMessage('start')] },
+      runConfig
+    );
     await run.resume([{ type: 'approve' }], runConfig);
-    expect(run.getInterrupt()?.payload).toMatchObject({ type: 'tool_approval' });
+    expect(run.getInterrupt()?.payload).toMatchObject({
+      type: 'tool_approval',
+    });
     await run.resume([{ type: 'approve' }], runConfig);
 
     expect(executions).toEqual([
@@ -294,8 +308,13 @@ describe('approval execution scope', () => {
     const { createRun, executions } = createHarness(false, true);
     const run = await createRun('a', 'question-run', 2);
     const runConfig = config('question-run');
-    await run.processStream({ messages: [new HumanMessage('start')] }, runConfig);
-    expect(run.getInterrupt()?.payload).toMatchObject({ type: 'ask_user_question' });
+    await run.processStream(
+      { messages: [new HumanMessage('start')] },
+      runConfig
+    );
+    expect(run.getInterrupt()?.payload).toMatchObject({
+      type: 'ask_user_question',
+    });
     expect(executions).toEqual([]);
 
     const rebuilt = await createRun('a', 'question-run', 2);
@@ -304,9 +323,14 @@ describe('approval execution scope', () => {
     expect(rebuilt.getInterrupt()).toBeUndefined();
   });
 
-  it.each(['resume', 'command'].flatMap((entrypoint) =>
-    ['agent', 'scope', 'principal'].map((changedIdentity) => ({ entrypoint, changedIdentity }))
-  ))(
+  it.each(
+    ['resume', 'command'].flatMap((entrypoint) =>
+      ['agent', 'scope', 'principal'].map((changedIdentity) => ({
+        entrypoint,
+        changedIdentity,
+      }))
+    )
+  )(
     'fails closed when $changedIdentity changes during $entrypoint',
     async ({ entrypoint, changedIdentity }) => {
       const { createRun, executions } = createHarness();
@@ -324,9 +348,13 @@ describe('approval execution scope', () => {
         changedIdentity === 'principal' ? 'user-b' : 'user-a'
       );
       const decisions = [{ type: 'approve' as const }];
-      await expect(entrypoint === 'command'
-        ? resumed.processStream(new Command({ resume: decisions }), resumeConfig)
-        : resumed.resume(decisions, resumeConfig)
+      await expect(
+        entrypoint === 'command'
+          ? resumed.processStream(
+              new Command({ resume: decisions }),
+              resumeConfig
+            )
+          : resumed.resume(decisions, resumeConfig)
       ).rejects.toThrow('Tool approval execution owner changed');
       expect(executions).toEqual([]);
     }

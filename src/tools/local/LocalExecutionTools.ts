@@ -13,15 +13,15 @@ import {
   BashExecutionToolSchema,
   BashToolOutputReferencesGuide,
 } from '@/tools/BashExecutor';
-import { capHeadTail } from './toolResultCaps';
 import {
   CodeExecutionToolName,
   CodeExecutionToolSchema,
 } from '@/tools/CodeExecutor';
+import { capHeadTail } from './toolResultCaps';
 import { Constants } from '@/common';
 
 const emptyOutputMessage =
-  'stdout: Empty. Ensure you\'re writing output explicitly.\n';
+  "stdout: Empty. Ensure you're writing output explicitly.\n";
 
 export const LocalCodeExecutionToolDescription = `
 Runs code on the local machine in the configured working directory. Unlike the remote Code API sandbox, this tool can see the local repository, installed runtimes, environment variables, and filesystem available to the host process.

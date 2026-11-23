@@ -276,6 +276,8 @@ export interface StreamLimits {
 export type RunConfig = {
   runId: string;
   graphConfig: LegacyGraphConfig | StandardGraphConfig | MultiAgentGraphConfig;
+  /** Attests an original inline image accepted by this run's host tool handler. */
+  isTrustedToolImage?: (block: object, callId: string) => boolean;
   /**
    * Run-scoped Langfuse configuration. Per-agent `AgentInputs.langfuse`
    * takes precedence for agent-specific spans; this object supplies defaults

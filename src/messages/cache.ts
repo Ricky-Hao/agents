@@ -3,8 +3,8 @@ import { BaseMessage, MessageContentComplex } from '@langchain/core/messages';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { AnthropicMessage } from '@/types/messages';
 import { hasComputerCallOutputMarker } from '@/utils/toolContent';
-import { toLangChainContent } from './langchain';
 import { isReasoningContentBlock } from './reasoningTypes';
+import { toLangChainContent } from './langchain';
 import { ContentTypes } from '@/common/enum';
 
 type MessageWithContent = {
@@ -136,7 +136,7 @@ function deepCloneContent<T extends string | MessageContentComplex[]>(
     return content;
   }
   if (Array.isArray(content)) {
-    return content.map((block) => {
+    return content.map((block: unknown) => {
       if (typeof block !== 'object' || block == null || isProxy(block)) {
         return block;
       }
@@ -412,9 +412,7 @@ function isCachePoint(block: unknown): boolean {
  * Anchoring the only breakpoint on a block that is about to disappear silently
  * loses tail caching, so all of these are excluded.
  */
-const NON_ANCHORABLE_BLOCK_TYPES = new Set([
-  'input_json_delta',
-]);
+const NON_ANCHORABLE_BLOCK_TYPES = new Set(['input_json_delta']);
 
 /**
  * A block can anchor the tail cache breakpoint when it is a real content block
@@ -725,7 +723,7 @@ export function addCacheControlToStablePrefixMessages<
  */
 function hasAnthropicCacheControl(content: MessageContentComplex[]): boolean {
   for (let i = 0; i < content.length; i++) {
-    const block = content[i];
+    const block: unknown = content[i];
     if (typeof block !== 'object' || block == null || isProxy(block)) {
       continue;
     }
@@ -1039,7 +1037,6 @@ export function addBedrockTailCacheControl<
           cachePoint: buildBedrockCachePoint(ttl),
         } as MessageContentComplex);
         cachePointPlaced = true;
-        modified = true;
       }
     } else if (typeof content === 'string' && canPlaceCachePoint) {
       workingContent = [

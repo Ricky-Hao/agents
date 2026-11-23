@@ -23,11 +23,11 @@ function modelReturning(
     invoke: async () => response,
     ...(mode === 'stream'
       ? {
-        stream: async function* () {
-          yield response;
-          yield new AIMessageChunk({ content: '' });
-        },
-      }
+          stream: async function* () {
+            yield response;
+            yield new AIMessageChunk({ content: '' });
+          },
+        }
       : {}),
   } as ChatModel;
 }

@@ -235,10 +235,9 @@ export class CustomChatGoogleGenerativeAI extends ChatGoogleGenerativeAI {
       total_tokens: usageMetadata.totalTokenCount ?? 0,
     };
 
-    if ((usageMetadata.cachedContentTokenCount ?? 0) > 0) {
-      output.input_token_details ??= {};
-      output.input_token_details.cache_read =
-        usageMetadata.cachedContentTokenCount;
+    const cacheRead = usageMetadata.cachedContentTokenCount ?? 0;
+    if (cacheRead > 0) {
+      output.input_token_details = { cache_read: cacheRead };
     }
 
     // gemini-3-pro-preview has bracket based tracking of tokens per request
@@ -247,17 +246,14 @@ export class CustomChatGoogleGenerativeAI extends ChatGoogleGenerativeAI {
         0,
         (usageMetadata.promptTokenCount ?? 0) - 200000
       );
-      const cachedOver200k = Math.max(
-        0,
-        (usageMetadata.cachedContentTokenCount ?? 0) - 200000
-      );
+      const cachedOver200k = Math.max(0, cacheRead - 200000);
       if (over200k > 0) {
         output.input_token_details = {
           ...output.input_token_details,
           over_200k: over200k,
         } as InputTokenDetails;
       }
-      if (cachedOver200k) {
+      if (cachedOver200k > 0) {
         output.input_token_details = {
           ...output.input_token_details,
           cache_read_over_200k: cachedOver200k,
@@ -285,11 +281,11 @@ export class CustomChatGoogleGenerativeAI extends ChatGoogleGenerativeAI {
         ...toolConfig,
         ...(functionCallingConfig?.mode === FunctionCallingMode.AUTO
           ? {
-            functionCallingConfig: {
-              ...functionCallingConfig,
-              mode: 'VALIDATED',
-            },
-          }
+              functionCallingConfig: {
+                ...functionCallingConfig,
+                mode: 'VALIDATED',
+              },
+            }
           : {}),
         includeServerSideToolInvocations: true,
       } as ToolConfig;

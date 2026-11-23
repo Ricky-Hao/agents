@@ -355,8 +355,10 @@ function isPendingInterrupt(
 ): value is NonNullable<SubagentResumeExecution['pendingInterrupts']>[number] {
   if (value == null || typeof value !== 'object') return false;
   const pending = value as Partial<RunInterruptResult<unknown>>;
-  return isString(pending.interruptId) &&
-    Object.prototype.hasOwnProperty.call(pending, 'payload');
+  return (
+    isString(pending.interruptId) &&
+    Object.prototype.hasOwnProperty.call(pending, 'payload')
+  );
 }
 
 function isSubagentResumeExecution(
@@ -398,12 +400,16 @@ function isSubagentResumeExecution(
     (execution.pendingInterrupts != null &&
       (!Array.isArray(execution.pendingInterrupts) ||
         !execution.pendingInterrupts.every(isPendingInterrupt) ||
-        new Set(execution.pendingInterrupts.map((pending) => pending.interruptId)).size !==
-          execution.pendingInterrupts.length ||
+        new Set(
+          execution.pendingInterrupts.map((pending) => pending.interruptId)
+        ).size !== execution.pendingInterrupts.length ||
         (execution.pendingInterruptIds != null &&
-          (execution.pendingInterruptIds.length !== execution.pendingInterrupts.length ||
+          (execution.pendingInterruptIds.length !==
+            execution.pendingInterrupts.length ||
             execution.pendingInterrupts.some(
-              (pending) => execution.pendingInterruptIds?.includes(pending.interruptId) !== true
+              (pending) =>
+                execution.pendingInterruptIds?.includes(pending.interruptId) !==
+                true
             )))))
   ) {
     return false;

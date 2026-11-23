@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid';
 import { createHash } from 'crypto';
 import { ToolCall } from '@langchain/core/messages/tool';
+import { ToolInputParsingException } from '@langchain/core/tools';
 import { RunnableLambda } from '@langchain/core/runnables';
 import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import {
@@ -141,6 +142,7 @@ import { ProviderTextProtectionError } from '@/protection/providerText';
 import { formatToolErrorContent } from '@/tools/toolErrorContent';
 import { PreparedSubagentError } from '@/tools/preparedSubagents';
 import { attachRunStepResumeState } from '@/tools/runStepResume';
+import type { ToolImageRead } from '@/tools/imageRead';
 import { isBackgroundDenyMode } from '@/types/hitl';
 
 function stripToolApprovalReviewConfig(
@@ -547,13 +549,13 @@ function buildToolApprovalInterruptPayload(
     executingAgentId != null &&
     executingAgentId !== ''
       ? {
-        subagent: {
-          run_id: leaf.subagentRunId,
-          agent_id: executingAgentId,
-          subagent_type: leaf.subagentType,
-          parent_tool_call_id: leaf.parentToolCallId,
-        },
-      }
+          subagent: {
+            run_id: leaf.subagentRunId,
+            agent_id: executingAgentId,
+            subagent_type: leaf.subagentType,
+            parent_tool_call_id: leaf.parentToolCallId,
+          },
+        }
       : {}),
     type: 'tool_approval',
     ...(hookSessionId == null || hookSessionId === ''
@@ -998,6 +1000,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
    * ToolNode building its own.
    */
   private toolOutputRegistry?: ToolOutputReferenceRegistry;
+  imageRead?: ToolImageRead;
   /** Run-scoped selection for swapping remote code tools to local executors. */
   private toolExecution?: t.ToolExecutionConfig;
   /** Owning graph's run-scoped breaker signal, composed into each batch's config. */
@@ -1075,9 +1078,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
           assistantBatch == null || getToolBatchReplayScope(config) == null
             ? undefined
             : getAssistantBatchReplayKey(
-              assistantBatch,
-              getToolBatchReplayScope(config)
-            );
+                assistantBatch,
+                getToolBatchReplayScope(config)
+              );
         const replayOwner = getToolBatchReplayOwner(
           config,
           this.executingAgentId ?? this.agentId ?? ''
@@ -1116,27 +1119,27 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
           isChildReplay =
             reviewEvidence?.owner != null
               ? isChildToolReplayOwner(
-                config,
-                reviewEvidence.owner,
-                trustedParentCallIds
-              )
-              : replayState.records.some((record) =>
-                isChildToolReplayOwner(
                   config,
-                  record.owner,
+                  reviewEvidence.owner,
                   trustedParentCallIds
                 )
-              );
+              : replayState.records.some((record) =>
+                  isChildToolReplayOwner(
+                    config,
+                    record.owner,
+                    trustedParentCallIds
+                  )
+                );
         }
         const hasApprovalAuthorization =
           reviewEvidence?.owner != null || replayState?.approvalOwner != null;
         const replayResumeStatus =
           hasApprovalAuthorization || replayState != null
             ? getToolReplayResumeStatus(
-              config,
-              reviewEvidence?.interruptId ?? replayState?.interruptId,
-              isChildReplay
-            )
+                config,
+                reviewEvidence?.interruptId ?? replayState?.interruptId,
+                isChildReplay
+              )
             : undefined;
         if (replayResumeStatus === 'unverifiable' && hasApprovalAuthorization) {
           throw new Error(
@@ -1259,11 +1262,11 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
             activeReplayKey == null
               ? new Map<string, Map<string, SettledDirectToolResult>>()
               : new Map([
-                [
-                  activeReplayKey,
-                  activeResults ?? new Map<string, SettledDirectToolResult>(),
-                ],
-              ]);
+                  [
+                    activeReplayKey,
+                    activeResults ?? new Map<string, SettledDirectToolResult>(),
+                  ],
+                ]);
           const turnState = this.createSubagentResumeState();
           const activeCallIds = new Set(
             assistantBatch?.message.tool_calls?.map((call) => call.id)
@@ -1401,27 +1404,27 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
       this.executingAgentId == null
         ? options
         : {
-          ...options,
-          configurable: {
-            ...options?.configurable,
-            executionContext: this.executionContext,
-          },
-          metadata: {
-            ...options?.metadata,
-            executionContext: this.executionContext,
-            agentId: this.executingAgentId,
-            activeAgentId: this.executingAgentId,
-            ...(this.executingAgentName == null
-              ? {}
-              : { activeAgentName: this.executingAgentName }),
-            ...(this.rootAgentId == null
-              ? {}
-              : { rootAgentId: this.rootAgentId }),
-            ...(this.rootAgentName == null
-              ? {}
-              : { rootAgentName: this.rootAgentName }),
-          },
-        };
+            ...options,
+            configurable: {
+              ...options?.configurable,
+              executionContext: this.executionContext,
+            },
+            metadata: {
+              ...options?.metadata,
+              executionContext: this.executionContext,
+              agentId: this.executingAgentId,
+              activeAgentId: this.executingAgentId,
+              ...(this.executingAgentName == null
+                ? {}
+                : { activeAgentName: this.executingAgentName }),
+              ...(this.rootAgentId == null
+                ? {}
+                : { rootAgentId: this.rootAgentId }),
+              ...(this.rootAgentName == null
+                ? {}
+                : { rootAgentName: this.rootAgentName }),
+            },
+          };
     return withLangfuseRuntimeScope(
       resolveLangfuseRuntimeScope({
         runLangfuse: this.runLangfuse,
@@ -1740,7 +1743,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
         ? config.configurable
         : stripToolApprovalReviewConfig(
             config.configurable as Record<string, unknown> | undefined
-        ),
+          ),
     };
     const runtime: ToolRuntime<T> = {
       ...toolConfig,
@@ -1902,7 +1905,8 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
       runInput,
     } = batchContext;
     const tool = this.toolMap.get(call.name);
-    const registry = this.toolOutputRegistry;
+    const isImageRead = this.imageRead != null && tool === this.imageRead.tool;
+    const registry = isImageRead ? undefined : this.toolOutputRegistry;
     /**
      * Prefer the caller-provided snapshot when present — `run()`
      * captures one synchronously per batch so direct-path placeholder
@@ -1919,7 +1923,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
     const resolveOptions = {
       substituteIntentKey: this.toolDeclaresBusinessIntent(call.name),
     };
-    if (preBatchSnapshot != null) {
+    if (preBatchSnapshot != null && !isImageRead) {
       resolveFn = <T>(_runId: string | undefined, args: T): ResolveResult<T> =>
         preBatchSnapshot.resolve(args, resolveOptions);
     } else if (registry != null) {
@@ -2136,7 +2140,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
           /** Error ToolMessages are never registered under a reference key. */
           return toolMsg;
         }
-        if (this.toolOutputRegistry != null) {
+        if (registry != null) {
           if (typeof originalContent === 'string') {
             const rawContent = originalContent;
             const registryContent = stripCodeSessionFileSummary(rawContent);
@@ -2161,7 +2165,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
              */
             if (
               refKey != null &&
-              this.toolOutputRegistry.claimWarnOnce(runId, call.name)
+              registry.claimWarnOnce(runId, call.name)
             ) {
               // eslint-disable-next-line no-console
               console.warn(
@@ -2196,6 +2200,14 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
       });
     } catch (_e: unknown) {
       const e = _e as Error;
+      if (isImageRead && e instanceof ToolInputParsingException) {
+        return new ToolMessage({
+          content: 'invalid_ref',
+          status: 'error',
+          name: call.name,
+          tool_call_id: call.id!,
+        });
+      }
       if (!this.handleToolErrors) {
         throw e;
       }
@@ -2268,13 +2280,13 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
             handlerError:
               handlerError instanceof Error
                 ? {
-                  message: handlerError.message,
-                  stack: handlerError.stack ?? undefined,
-                }
+                    message: handlerError.message,
+                    stack: handlerError.stack ?? undefined,
+                  }
                 : {
-                  message: String(handlerError),
-                  stack: undefined,
-                },
+                    message: String(handlerError),
+                    stack: undefined,
+                  },
           });
         }
       }
@@ -2470,10 +2482,10 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
       call.id == null || call.id === ''
         ? undefined
         : createToolApprovalReplayKey(
-          config,
-          this.executingAgentId ?? this.agentId ?? '',
-          call.id
-        );
+            config,
+            this.executingAgentId ?? this.agentId ?? '',
+            call.id
+          );
     const approvalReplaySessionId = getToolApprovalReplaySessionId(
       config,
       runId
@@ -2482,9 +2494,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
       approvalReplayKey == null
         ? undefined
         : hookRegistry?.getPendingToolApproval(
-          approvalReplaySessionId,
-          approvalReplayKey
-        );
+            approvalReplaySessionId,
+            approvalReplayKey
+          );
     const replayOwner = getToolBatchReplayOwner(
       config,
       this.executingAgentId ?? this.agentId ?? ''
@@ -2633,46 +2645,46 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
       const preResult: AggregatedHookResult | undefined =
         hookRegistry == null
           ? {
-            additionalContexts: [],
-            injectedMessages: [],
-            errors: [],
-          }
+              additionalContexts: [],
+              injectedMessages: [],
+              errors: [],
+            }
           : await executeHooks({
-            registry: hookRegistry,
-            input: {
-              hook_event_name: 'PreToolUse',
-              runId,
-              threadId,
-              agentId: this.agentId,
-              executionContext: this.executionContext,
-              executingAgentId: this.executingAgentId,
-              toolName: call.name,
-              toolInput: resolvedArgs,
-              toolUseId: call.id ?? '',
-              stepId,
-              turn,
-            },
-            sessionId: runId,
-            matchQuery: call.name,
-            onceReplayKey: approvalReplayKey,
-            onceReplaySessionId: approvalReplaySessionId,
-          }).catch((): AggregatedHookResult | undefined =>
-            approvalReviewEvidence == null &&
+              registry: hookRegistry,
+              input: {
+                hook_event_name: 'PreToolUse',
+                runId,
+                threadId,
+                agentId: this.agentId,
+                executionContext: this.executionContext,
+                executingAgentId: this.executingAgentId,
+                toolName: call.name,
+                toolInput: resolvedArgs,
+                toolUseId: call.id ?? '',
+                stepId,
+                turn,
+              },
+              sessionId: runId,
+              matchQuery: call.name,
+              onceReplayKey: approvalReplayKey,
+              onceReplaySessionId: approvalReplaySessionId,
+            }).catch((): AggregatedHookResult | undefined =>
+              approvalReviewEvidence == null &&
               !isBackgroundDenyMode(this.humanInTheLoop)
-              ? undefined
-              : {
-                decision: 'deny',
-                reason: isBackgroundDenyMode(this.humanInTheLoop)
-                  ? 'Approval policy could not be evaluated'
-                  : 'Approval policy could not be evaluated on resume',
-                ...(isBackgroundDenyMode(this.humanInTheLoop)
-                  ? { hasHookFailures: true }
-                  : {}),
-                additionalContexts: [],
-                injectedMessages: [],
-                errors: [],
-              }
-          );
+                ? undefined
+                : {
+                    decision: 'deny',
+                    reason: isBackgroundDenyMode(this.humanInTheLoop)
+                      ? 'Approval policy could not be evaluated'
+                      : 'Approval policy could not be evaluated on resume',
+                    ...(isBackgroundDenyMode(this.humanInTheLoop)
+                      ? { hasHookFailures: true }
+                      : {}),
+                    additionalContexts: [],
+                    injectedMessages: [],
+                    errors: [],
+                  }
+            );
 
       if (preResult != null && preResult.additionalContexts.length > 0) {
         replayAdditionalContexts.push(...preResult.additionalContexts);
@@ -2763,9 +2775,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
             const reason = isBackgroundDenyMode(this.humanInTheLoop)
               ? this.backgroundApprovalReason(call.name, preResult.reason)
               : this.resolveAskDecisionForDirectTool(
-                preResult.reason,
-                call.name
-              );
+                  preResult.reason,
+                  call.name
+                );
             return persistOutput(
               this.blockDirectCall({
                 call,
@@ -3048,9 +3060,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
             typeof output.content === 'string'
               ? output.content
               : serializeStructuredValueBounded(
-                output.content,
-                this.maxToolResultChars
-              ).content,
+                  output.content,
+                  this.maxToolResultChars
+                ).content,
           stepId,
           turn,
         },
@@ -3798,43 +3810,43 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
         hookRegistry == null
           ? preToolCalls.map(() => HOOK_FALLBACK)
           : await Promise.all(
-            preToolCalls.map((entry) => {
-              const toolUseId = entry.call.id;
-              const approvalReplayKey =
+              preToolCalls.map((entry) => {
+                const toolUseId = entry.call.id;
+                const approvalReplayKey =
                   toolUseId == null
                     ? undefined
                     : createToolApprovalReplayKey(
-                      config,
-                      this.executingAgentId ?? this.agentId ?? '',
-                      toolUseId
-                    );
-              return executeHooks({
-                registry: hookRegistry,
-                input: {
-                  hook_event_name: 'PreToolUse',
-                  runId,
-                  threadId,
-                  agentId: this.agentId,
-                  executionContext: this.executionContext,
-                  executingAgentId: this.executingAgentId,
-                  toolName: entry.call.name,
-                  toolInput: entry.args,
-                  toolUseId: entry.call.id!,
-                  stepId: entry.stepId,
-                  turn: this.toolUsageCount.get(entry.call.name) ?? 0,
-                },
-                sessionId: runId,
-                matchQuery: entry.call.name,
-                onceReplayKey: approvalReplayKey,
-                onceReplaySessionId: approvalReplaySessionId,
-              }).catch(
-                (): AggregatedHookResult =>
-                  isBackgroundDenyMode(this.humanInTheLoop)
-                    ? { ...HOOK_FALLBACK, hasHookFailures: true }
-                    : HOOK_FALLBACK
-              );
-            })
-          );
+                        config,
+                        this.executingAgentId ?? this.agentId ?? '',
+                        toolUseId
+                      );
+                return executeHooks({
+                  registry: hookRegistry,
+                  input: {
+                    hook_event_name: 'PreToolUse',
+                    runId,
+                    threadId,
+                    agentId: this.agentId,
+                    executionContext: this.executionContext,
+                    executingAgentId: this.executingAgentId,
+                    toolName: entry.call.name,
+                    toolInput: entry.args,
+                    toolUseId: entry.call.id!,
+                    stepId: entry.stepId,
+                    turn: this.toolUsageCount.get(entry.call.name) ?? 0,
+                  },
+                  sessionId: runId,
+                  matchQuery: entry.call.name,
+                  onceReplayKey: approvalReplayKey,
+                  onceReplaySessionId: approvalReplaySessionId,
+                }).catch(
+                  (): AggregatedHookResult =>
+                    isBackgroundDenyMode(this.humanInTheLoop)
+                      ? { ...HOOK_FALLBACK, hasHookFailures: true }
+                      : HOOK_FALLBACK
+                );
+              })
+            );
 
       type PendingEntry = (typeof preToolCalls)[number];
 
@@ -4024,9 +4036,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
               entry,
               isBackgroundDenyMode(this.humanInTheLoop)
                 ? this.backgroundApprovalReason(
-                  entry.call.name,
-                  hookResult.reason
-                )
+                    entry.call.name,
+                    hookResult.reason
+                  )
                 : (hookResult.reason ?? 'Blocked by hook')
             );
             continue;
@@ -4546,68 +4558,68 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
         dispatchRequests.length === 0
           ? Promise.resolve([] as t.ToolExecuteResult[])
           : new Promise<t.ToolExecuteResult[]>((resolve, reject) => {
-            let dispatchSettled = false;
-            let resultSettled = false;
-            let settledResults: t.ToolExecuteResult[] | undefined;
+              let dispatchSettled = false;
+              let resultSettled = false;
+              let settledResults: t.ToolExecuteResult[] | undefined;
 
-            const maybeResolve = (): void => {
-              if (dispatchSettled && resultSettled) {
-                resolve(settledResults ?? []);
-              }
-            };
+              const maybeResolve = (): void => {
+                if (dispatchSettled && resultSettled) {
+                  resolve(settledResults ?? []);
+                }
+              };
 
-            const batchRequest: t.ToolExecuteBatchRequest = {
-              executionContext: this.executionContext,
-              toolCalls: dispatchRequests,
-              userId: config.configurable?.user_id as string | undefined,
-              // Dispatch attribution, NOT the hook subagent-scope marker:
-              // hosts key tool/credential lookup on the owning agent, and
-              // the eager path sends `agentContext.agentId` — this must
-              // match it at the top level too.
-              agentId: this.executingAgentId,
-              callerCapabilityProjection:
+              const batchRequest: t.ToolExecuteBatchRequest = {
+                executionContext: this.executionContext,
+                toolCalls: dispatchRequests,
+                userId: config.configurable?.user_id as string | undefined,
+                // Dispatch attribution, NOT the hook subagent-scope marker:
+                // hosts key tool/credential lookup on the owning agent, and
+                // the eager path sends `agentContext.agentId` — this must
+                // match it at the top level too.
+                agentId: this.executingAgentId,
+                callerCapabilityProjection:
                   this.getCallerCapabilityProjectionSnapshot(),
-              configurable: stripHostExecutionConfig(
+                configurable: stripHostExecutionConfig(
                   config.configurable as Record<string, unknown> | undefined
-              ),
-              metadata: config.metadata as
+                ),
+                metadata: config.metadata as
                   | Record<string, unknown>
                   | undefined,
-              signal: config.signal,
-              resolve: (results): void => {
-                const receivedAt = Date.now();
-                for (const result of results) {
-                  if (dispatchRequestById.has(result.toolCallId)) {
-                    receivedAtById.set(
-                      result.toolCallId,
-                      result.received_at ?? receivedAt
-                    );
+                signal: config.signal,
+                resolve: (results): void => {
+                  const receivedAt = Date.now();
+                  for (const result of results) {
+                    if (dispatchRequestById.has(result.toolCallId)) {
+                      receivedAtById.set(
+                        result.toolCallId,
+                        result.received_at ?? receivedAt
+                      );
+                    }
                   }
-                }
-                resultSettled = true;
-                settledResults = results;
-                maybeResolve();
-              },
-              reject,
-              ...(canEmitEarlyCompletions && { onResult }),
-            };
+                  resultSettled = true;
+                  settledResults = results;
+                  maybeResolve();
+                },
+                reject,
+                ...(canEmitEarlyCompletions && { onResult }),
+              };
 
-            void safeDispatchCustomEvent(
-              GraphEvents.ON_TOOL_CALLS_DISPATCHED,
-              createToolCallsDispatchedEvent(config, dispatchRequests),
-              config
-            );
-            void safeDispatchCustomEvent(
-              GraphEvents.ON_TOOL_EXECUTE,
-              batchRequest,
-              config
-            )
-              .then(() => {
-                dispatchSettled = true;
-                maybeResolve();
-              })
-              .catch(reject);
-          });
+              void safeDispatchCustomEvent(
+                GraphEvents.ON_TOOL_CALLS_DISPATCHED,
+                createToolCallsDispatchedEvent(config, dispatchRequests),
+                config
+              );
+              void safeDispatchCustomEvent(
+                GraphEvents.ON_TOOL_EXECUTE,
+                batchRequest,
+                config
+              )
+                .then(() => {
+                  dispatchSettled = true;
+                  maybeResolve();
+                })
+                .catch(reject);
+            });
 
       const eagerResultsPromise = Promise.all(
         eagerExecutions.map(async ({ request, execution }) => {
@@ -4846,6 +4858,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
               additional_kwargs: successRefMeta as Record<string, unknown>,
             }),
           });
+          if (finalToolOutput === result.content && config.signal?.aborted !== true) {
+            this.imageRead?.accept(toolMessage);
+          }
         }
 
         if (
@@ -5215,14 +5230,14 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
     const output =
       result.status === 'error'
         ? formatToolErrorContent(
-          result.errorMessage,
-          this.maxToolResultChars,
-          config.signal
-        )
+            result.errorMessage,
+            this.maxToolResultChars,
+            config.signal
+          )
         : serializeToolOutputWithinLimits(
-          result.content,
-          this.maxToolResultChars
-        ).content;
+            result.content,
+            this.maxToolResultChars
+          ).content;
     return this.dispatchStepCompleted(
       result.toolCallId,
       request.name,
@@ -5696,9 +5711,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
         sendAssistantBatch == null || getToolBatchReplayScope(config) == null
           ? undefined
           : getAssistantBatchReplayKey(
-            sendAssistantBatch,
-            getToolBatchReplayScope(config)
-          );
+              sendAssistantBatch,
+              getToolBatchReplayScope(config)
+            );
       const sendOutput = await this.runDirectToolWithLifecycleHooks(
         input.lg_tool_call,
         config,
@@ -5718,17 +5733,17 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
       outputs =
         directAdditionalContexts.length > 0
           ? [
-            sendOutput,
-            stampSyntheticProviderMessage(
-              new HumanMessage({
-                content: directAdditionalContexts.join('\n\n'),
-                // Match the event-driven path's marker so hosts /
-                // model-side annotators treat this as system intent
-                // rather than ordinary user text. Codex P2 [46].
-                additional_kwargs: { role: 'system', source: 'hook' },
-              })
-            ),
-          ]
+              sendOutput,
+              stampSyntheticProviderMessage(
+                new HumanMessage({
+                  content: directAdditionalContexts.join('\n\n'),
+                  // Match the event-driven path's marker so hosts /
+                  // model-side annotators treat this as system intent
+                  // rather than ordinary user text. Codex P2 [46].
+                  additional_kwargs: { role: 'system', source: 'hook' },
+                })
+              ),
+            ]
           : [sendOutput];
       await this.handleRunToolCompletions(
         [input.lg_tool_call],
@@ -5767,9 +5782,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
         getToolBatchReplayScope(config) == null
           ? undefined
           : getAssistantBatchReplayKey(
-            assistantBatch,
-            getToolBatchReplayScope(config)
-          );
+              assistantBatch,
+              getToolBatchReplayScope(config)
+            );
 
       if (this.loadRuntimeTools) {
         const { tools, toolMap } = this.loadRuntimeTools(
@@ -5834,12 +5849,12 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
       const attributableInvalidCalls = !canPromoteInvalidCalls
         ? []
         : (aiMessage.invalid_tool_calls ?? []).filter(
-          (call) =>
-            call.id != null &&
+            (call) =>
+              call.id != null &&
               call.id !== '' &&
               !toolMessageIds.has(call.id) &&
               !call.id.startsWith(Constants.ANTHROPIC_SERVER_TOOL_PREFIX)
-        );
+          );
       invalidCallResults = attributableInvalidCalls.map(
         (call) =>
           new ToolMessage({
@@ -5871,28 +5886,28 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
       promotedAiMessage =
         attributableInvalidCalls.length > 0
           ? new AIMessage({
-            id: aiMessage.id,
-            content: sanitizeInvalidToolUseBlocks(
-              aiMessage.content,
-              attributableInvalidCalls
-            ),
-            name: aiMessage.name,
-            additional_kwargs: aiMessage.additional_kwargs,
-            response_metadata: aiMessage.response_metadata,
-            usage_metadata: aiMessage.usage_metadata,
-            tool_calls: [
-              ...(aiMessage.tool_calls ?? []),
-              ...attributableInvalidCalls.map((call) => ({
-                id: call.id!,
-                name: normalizeInvalidCallName(call.name),
-                args: {},
-                type: 'tool_call' as const,
-              })),
-            ],
-            invalid_tool_calls: (aiMessage.invalid_tool_calls ?? []).filter(
-              (call) => !attributableInvalidCalls.includes(call)
-            ),
-          })
+              id: aiMessage.id,
+              content: sanitizeInvalidToolUseBlocks(
+                aiMessage.content,
+                attributableInvalidCalls
+              ),
+              name: aiMessage.name,
+              additional_kwargs: aiMessage.additional_kwargs,
+              response_metadata: aiMessage.response_metadata,
+              usage_metadata: aiMessage.usage_metadata,
+              tool_calls: [
+                ...(aiMessage.tool_calls ?? []),
+                ...attributableInvalidCalls.map((call) => ({
+                  id: call.id!,
+                  name: normalizeInvalidCallName(call.name),
+                  args: {},
+                  type: 'tool_call' as const,
+                })),
+              ],
+              invalid_tool_calls: (aiMessage.invalid_tool_calls ?? []).filter(
+                (call) => !attributableInvalidCalls.includes(call)
+              ),
+            })
           : undefined;
 
       if (this.eventDrivenMode && filteredCalls.length > 0) {
@@ -5986,23 +6001,23 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
         const directOutputs: (BaseMessage | Command)[] =
           directCalls.length > 0
             ? await this.runDirectBatchInterruptSafe(
-              directCalls,
-              directIndices,
-              config,
-              {
-                turn,
-                batchScopeId,
-                resolvedArgsByCallId,
-                codeSessionBaselineByCallId,
-                errorOwnership,
-                preBatchSnapshot,
-                additionalContextsSink: directAdditionalContexts,
-                replayBatchKey,
-                replayCallPositions,
-                approvalScopeCallIds,
-                runInput: input as T,
-              }
-            )
+                directCalls,
+                directIndices,
+                config,
+                {
+                  turn,
+                  batchScopeId,
+                  resolvedArgsByCallId,
+                  codeSessionBaselineByCallId,
+                  errorOwnership,
+                  preBatchSnapshot,
+                  additionalContextsSink: directAdditionalContexts,
+                  replayBatchKey,
+                  replayCallPositions,
+                  approvalScopeCallIds,
+                  runInput: input as T,
+                }
+              )
             : [];
 
         const settledDirectResults =
@@ -6050,31 +6065,31 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
         const eventResult =
           eventCalls.length > 0
             ? await this.dispatchToolEvents(eventCalls, config, {
-              batchIndices: eventIndices,
-              turn,
-              batchScopeId,
-              preResolvedArgs: preResolvedEventArgs,
-              preBatchSnapshot,
-            })
+                batchIndices: eventIndices,
+                turn,
+                batchScopeId,
+                preResolvedArgs: preResolvedEventArgs,
+                preBatchSnapshot,
+              })
             : {
-              toolMessages: [] as ToolMessage[],
-              injected: [] as BaseMessage[],
-            };
+                toolMessages: [] as ToolMessage[],
+                injected: [] as BaseMessage[],
+              };
 
         const directInjected: BaseMessage[] =
           directAdditionalContexts.length > 0
             ? [
-              stampSyntheticProviderMessage(
-                new HumanMessage({
-                  content: directAdditionalContexts.join('\n\n'),
-                  // System-role metadata to match the event-driven
-                  // path so policy/recovery guidance is treated
-                  // consistently regardless of whether the tool ran
-                  // direct or dispatched. Codex P2 [46].
-                  additional_kwargs: { role: 'system', source: 'hook' },
-                })
-              ),
-            ]
+                stampSyntheticProviderMessage(
+                  new HumanMessage({
+                    content: directAdditionalContexts.join('\n\n'),
+                    // System-role metadata to match the event-driven
+                    // path so policy/recovery guidance is treated
+                    // consistently regardless of whether the tool ran
+                    // direct or dispatched. Codex P2 [46].
+                    additional_kwargs: { role: 'system', source: 'hook' },
+                  })
+                ),
+              ]
             : [];
         outputs = [
           // Replacement AI message first (reducer upsert-by-id), then results.
@@ -6130,19 +6145,19 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
         outputs =
           directAdditionalContexts.length > 0
             ? [
-              ...promotedPrefix,
-              ...toolOutputs,
-              ...invalidCallResults,
-              stampSyntheticProviderMessage(
-                new HumanMessage({
-                  content: directAdditionalContexts.join('\n\n'),
-                  // Same system-role marker the event-driven path
-                  // uses so direct vs dispatched is invisible to
-                  // downstream consumers. Codex P2 [46].
-                  additional_kwargs: { role: 'system', source: 'hook' },
-                })
-              ),
-            ]
+                ...promotedPrefix,
+                ...toolOutputs,
+                ...invalidCallResults,
+                stampSyntheticProviderMessage(
+                  new HumanMessage({
+                    content: directAdditionalContexts.join('\n\n'),
+                    // Same system-role marker the event-driven path
+                    // uses so direct vs dispatched is invisible to
+                    // downstream consumers. Codex P2 [46].
+                    additional_kwargs: { role: 'system', source: 'hook' },
+                  })
+                ),
+              ]
             : [...promotedPrefix, ...toolOutputs, ...invalidCallResults];
       }
 
@@ -6191,10 +6206,10 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
       outputs = outputs.map((output) =>
         isCommand(output)
           ? patchCommandUpdateForPromotedInvalidCalls(
-            output,
+              output,
               promotedAiMessage!,
               invalidCallResults
-          )
+            )
           : output
       );
     }
