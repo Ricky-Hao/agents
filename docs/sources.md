@@ -22,6 +22,6 @@
 | `sdk-validation` | SDK 开发规范、lint、Langfuse 测试及 decisions HTTP 超时测试修正。 |
 | `sdk-consumer-docs` | SDK README 与迁移文档。依赖它所述的包元数据、摘要和工具行为。 |
 | `upstream-publish-guard` | 历史 fork 对上游 npm publish 和 GitHub Release jobs 的仓库限定。发版流程另行移除 workflows。 |
-| `tool-image-read` | `read_image` 的同轮根图引用、直接工具执行和 Responses 预算投影。首次加入 `4.2.11-ricky.2` 本地候选。 [补丁说明](../patches/tool-image-read/README.md) |
+| `tool-image-read` | `read_image` 的同轮根图引用、直接工具执行和 Responses 预算投影。`4.2.11-ricky.2` 首次交付，`4.2.11-ricky.3` 支持宿主已确认的前台提问 saver。 [补丁说明](../patches/tool-image-read/README.md) |
 
 `src/messages/format.ts` 和 `src/stream.ts` 由消息组及摘要组分段维护。`src/types/tools.ts` 中 Skill 来源字段与输出上限分属消息组和本地上限组。`ProgrammaticToolCalling.ts` 和对应测试分属程序化工具组与产物提示组。更新一个组时，从该组的前序树生成差异。

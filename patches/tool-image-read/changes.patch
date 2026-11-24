@@ -1,8 +1,16 @@
 diff --git a/src/graphs/Graph.ts b/src/graphs/Graph.ts
-index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0f3b0a98c 100644
+index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..ef98b74844799a816e79427ddbd7b3c607975272 100644
 --- a/src/graphs/Graph.ts
 +++ b/src/graphs/Graph.ts
-@@ -37,6 +37,8 @@ import type {
+@@ -7,6 +7,7 @@ import { ContextOverflowError } from '@langchain/core/errors';
+ import { Runnable, RunnableConfig } from '@langchain/core/runnables';
+ import { START, END, StateGraph, Annotation } from '@langchain/langgraph';
+ import {
++  AIMessage,
+   ToolMessage,
+   HumanMessage,
+   AIMessageChunk,
+@@ -37,6 +38,8 @@ import type {
    GraphFactoryRequest,
  } from '@/graphs/graphFactory';
  import type { OverflowRecoveryPlan } from '@/llm/contextOverflowRecovery';
@@ -11,7 +19,7 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
  import type { FallbackErrorContext } from '@/llm/invoke';
  import type { HandoffRouting } from './handoff';
  import type { HookRegistry } from '@/hooks';
-@@ -1370,6 +1372,7 @@ export abstract class Graph<
+@@ -1370,6 +1373,7 @@ export abstract class Graph<
  export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
    readonly runName: string = STANDARD_GRAPH_RUN_NAME;
    overrideModel?: t.ChatModel;
@@ -19,7 +27,7 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
    private subagentModelOverride?: t.ChatModel;
    private readonly graphFactory: GraphFactory;
    private readonly supportsMultiAgentChildren: boolean;
-@@ -3040,6 +3043,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+@@ -3040,6 +3044,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
          errorHandler: (data, metadata): Promise<boolean> =>
            StandardGraph.handleToolCallErrorStatic(this, data, metadata),
        });
@@ -27,7 +35,7 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
        this.registerCompiledToolNode(node);
        if (agentContext != null) {
          this.subagentToolNodes.set(agentContext.agentId, node);
-@@ -3942,11 +3946,22 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+@@ -3942,11 +3947,22 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
          return best;
        };
  
@@ -51,7 +59,7 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
        ): BaseMessage[] => {
          if (!(candidate[candidate.length - 1] instanceof ToolMessage)) {
            return candidate;
-@@ -3963,7 +3978,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+@@ -3963,7 +3979,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
          ) {
            return trackProviderMessageOrigins(
              candidate,
@@ -60,7 +68,7 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
            );
          }
          return candidate;
-@@ -4017,7 +4032,8 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+@@ -4017,7 +4033,8 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
            finalMessages,
            agentContext.provider,
            agentContext.clientOptions,
@@ -70,7 +78,7 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
          );
  
          if (artifactCandidate !== finalMessages) {
-@@ -4026,6 +4042,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+@@ -4026,6 +4043,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
              artifactBaseMessages = finalMessages;
              finalMessages = artifactCandidate;
            } else {
@@ -78,7 +86,7 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
              emitAgentLog(
                config,
                'warn',
-@@ -4047,6 +4064,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+@@ -4047,6 +4065,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
        let finalProjection = measureProviderPayload(finalMessages);
        if (artifactBaseMessages != null) {
          if (!finalProjection.fits) {
@@ -86,7 +94,7 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
            finalMessages = projectProviderReferences(
              applyProviderMessageTransforms(artifactBaseMessages)
            );
-@@ -4220,6 +4238,13 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+@@ -4220,6 +4239,13 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
        );
  
        const beforeFinalProviderProjection = finalMessages;
@@ -100,7 +108,7 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
        const preparedRequest = prepareProviderRequest({
          model: (this.overrideModel ?? model) as t.ChatModel,
          messages: beforeFinalProviderProjection,
-@@ -4228,13 +4253,20 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+@@ -4228,13 +4254,20 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
          config,
          maxToolResultChars: maxProviderToolResultChars,
          toolHistory,
@@ -128,7 +136,7 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
        });
        finalMessages = preparedRequest.messages;
  
-@@ -4476,6 +4508,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+@@ -4476,6 +4509,7 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
                invokeConfig
              )
          );
@@ -136,6 +144,19 @@ index 869910c68b174f05a9e9d2cfaecaf81379aa61b8..d55f67813bc07dbaad7c6a37cd6907b0
        } catch (primaryError) {
          clearCurrentDeltaStepMarkers({
            graph: this,
+@@ -4921,6 +4955,12 @@ export class StandardGraph extends Graph<t.BaseGraphState, t.GraphNode> {
+        * handled everything — both paths become no-ops.
+        */
+       const responseMessage = result.messages?.[0];
++      if (
++        this.imageRead?.checkpointed &&
++        responseMessage instanceof AIMessage
++      ) {
++        this.imageRead.captureReadCalls(responseMessage);
++      }
+       /**
+        * Provenance for the handoff-cue gate: recorded at the node, where the
+        * produced turn is unambiguous. The public ChatModel contract does not
 diff --git a/src/llm/prepareProviderRequest.ts b/src/llm/prepareProviderRequest.ts
 index 9dc2597382c51de8de08f99e3cdb7043d4740bc1..5cb66f91237ac2c0da57556eb4cf75b2ef9ba484 100644
 --- a/src/llm/prepareProviderRequest.ts
@@ -266,7 +287,7 @@ index 41bb88913be1bab573196174244267acd7e16f95..2257c10741aaeae4b154b59b6e9f5b15
      const artifactPayload = new HumanMessage({
        content: toLangChainContent(aggregate.blocks),
 diff --git a/src/run.ts b/src/run.ts
-index da6c5598db32558ed62b1d035213b1945f493d83..30800e701b05153f903ed253504a9d5b8431347a 100644
+index da6c5598db32558ed62b1d035213b1945f493d83..cd18fc6950e6a51db0892916f47ce8a23ae6bf23 100644
 --- a/src/run.ts
 +++ b/src/run.ts
 @@ -40,6 +40,7 @@ import {
@@ -293,29 +314,31 @@ index da6c5598db32558ed62b1d035213b1945f493d83..30800e701b05153f903ed253504a9d5b
  import { createGraph } from '@/graphs/createGraph';
  import { isFadingTier } from '@/messages/fading';
  import { resolveMaxSeals } from '@/llm/preempt';
-@@ -637,7 +640,10 @@ export class Run<_T extends t.BaseGraphState> {
+@@ -637,7 +640,11 @@ export class Run<_T extends t.BaseGraphState> {
        }
      } else {
        /** Default to legacy graph for 'standard' or undefined type */
 -      this.graphRunnable = this.createLegacyGraph(config.graphConfig);
 +      this.graphRunnable = this.createLegacyGraph(
 +        config.graphConfig,
-+        config.isTrustedToolImage
++        config.isTrustedToolImage,
++        config.allowToolImageReadWithCheckpointer
 +      );
        if (this.Graph) {
          this.Graph.handlerRegistry = handlerRegistry;
        }
-@@ -670,7 +676,8 @@ export class Run<_T extends t.BaseGraphState> {
+@@ -670,7 +677,9 @@ export class Run<_T extends t.BaseGraphState> {
    }
  
    private createLegacyGraph(
 -    config: t.LegacyGraphConfig | t.StandardGraphConfig
 +    config: t.LegacyGraphConfig | t.StandardGraphConfig,
-+    isTrustedToolImage?: t.RunConfig['isTrustedToolImage']
++    isTrustedToolImage?: t.RunConfig['isTrustedToolImage'],
++    allowToolImageReadWithCheckpointer?: boolean
    ): t.CompiledStateWorkflow {
      let agentConfig: t.AgentInputs;
      let signal: AbortSignal | undefined;
-@@ -703,6 +710,41 @@ export class Run<_T extends t.BaseGraphState> {
+@@ -703,6 +712,48 @@ export class Run<_T extends t.BaseGraphState> {
        signal = legacySignal;
      }
  
@@ -328,12 +351,16 @@ index da6c5598db32558ed62b1d035213b1945f493d83..30800e701b05153f903ed253504a9d5b
 +      clientOptions?.useResponsesApi === true &&
 +      clientOptions.modelKwargs?.previous_response_id == null &&
 +      (clientOptions.fallbacks?.length ?? 0) === 0 &&
-+      config.compileOptions?.checkpointer == null &&
++      (config.compileOptions?.checkpointer == null ||
++        allowToolImageReadWithCheckpointer === true) &&
 +      this.humanInTheLoop?.enabled !== true &&
 +      (this.clientDelegatedToolNames?.length ?? 0) === 0 &&
-+      !['LANGSMITH_TRACING_V2', 'LANGCHAIN_TRACING_V2', 'LANGSMITH_TRACING', 'LANGCHAIN_TRACING'].some(
-+        (key) => process.env[key]?.toLowerCase() === 'true'
-+      ) &&
++      ![
++        'LANGSMITH_TRACING_V2',
++        'LANGCHAIN_TRACING_V2',
++        'LANGSMITH_TRACING',
++        'LANGCHAIN_TRACING',
++      ].some((key) => process.env[key]?.toLowerCase() === 'true') &&
 +      !shouldCreateLangfuseHandler(
 +        resolveLangfuseConfig(this.langfuse, agentConfig.langfuse)
 +      ) &&
@@ -342,7 +369,10 @@ index da6c5598db32558ed62b1d035213b1945f493d83..30800e701b05153f903ed253504a9d5b
 +        ...(agentConfig.tools ?? []),
 +        ...(agentConfig.graphTools ?? []),
 +      ].some((tool) => 'name' in tool && tool.name === READ_IMAGE_TOOL)
-+        ? new ToolImageRead(isTrustedToolImage)
++        ? new ToolImageRead(
++            isTrustedToolImage,
++            config.compileOptions?.checkpointer != null
++          )
 +        : undefined;
 +    if (imageRead != null) {
 +      // GenericTool's StructuredToolInterface type only models Zod schemas.
@@ -357,7 +387,7 @@ index da6c5598db32558ed62b1d035213b1945f493d83..30800e701b05153f903ed253504a9d5b
      const standardGraph = createGraph({
        kind: 'standard',
        input: {
-@@ -726,6 +768,7 @@ export class Run<_T extends t.BaseGraphState> {
+@@ -726,6 +777,7 @@ export class Run<_T extends t.BaseGraphState> {
          clientDelegatedToolNames: this.clientDelegatedToolNames,
        },
      });
@@ -365,7 +395,7 @@ index da6c5598db32558ed62b1d035213b1945f493d83..30800e701b05153f903ed253504a9d5b
      /** Propagate compile options from graph config */
      standardGraph.compileOptions = this.applyHITLCheckpointerFallback(
        config.compileOptions
-@@ -1322,6 +1365,7 @@ export class Run<_T extends t.BaseGraphState> {
+@@ -1322,6 +1374,7 @@ export class Run<_T extends t.BaseGraphState> {
       * instead of `inputs.messages`.
       */
      const isResume = inputs instanceof Command;
@@ -373,15 +403,29 @@ index da6c5598db32558ed62b1d035213b1945f493d83..30800e701b05153f903ed253504a9d5b
      if (!isResume) {
        graph.startFreshLangfuseExecution();
      }
-@@ -1810,6 +1854,7 @@ export class Run<_T extends t.BaseGraphState> {
+@@ -1620,6 +1673,7 @@ export class Run<_T extends t.BaseGraphState> {
+           if (data.chunk != null && isInterrupted<unknown>(data.chunk)) {
+             const interrupts = data.chunk[INTERRUPT];
+             if (interrupts.length > 0) {
++              graph.imageRead?.end();
+               const pending = new Map(
+                 (this._interrupt?.pendingInterrupts ?? []).map((entry) => [
+                   entry.interruptId,
+@@ -1810,6 +1864,13 @@ export class Run<_T extends t.BaseGraphState> {
      };
  
      try {
-+      if (!isResume) graph.imageRead?.start();
++      if (
++        !isResume &&
++        config.configurable?.checkpoint_id == null &&
++        config.configurable?.checkpoint_map == null
++      ) {
++        graph.imageRead?.start();
++      }
        // When opted in, seed the root trace id from this run's id so feedback /
        // other external signals can be attached to the trace later without a
        // lookup (see SeededTraceIdGenerator in ./instrumentation).
-@@ -1863,6 +1908,7 @@ export class Run<_T extends t.BaseGraphState> {
+@@ -1863,6 +1924,7 @@ export class Run<_T extends t.BaseGraphState> {
        }
        throw err;
      } finally {
@@ -389,8 +433,53 @@ index da6c5598db32558ed62b1d035213b1945f493d83..30800e701b05153f903ed253504a9d5b
        /**
         * Preserve session-scoped hooks when the run paused on a HITL
         * interrupt — the very next call will be `Run.resume()`, which
+diff --git a/src/stream.ts b/src/stream.ts
+index 64114a5ecf3f979ac174515f545ce2accc341270..80629601ac691946cad64de5d60b2bdd6011cbb6 100644
+--- a/src/stream.ts
++++ b/src/stream.ts
+@@ -64,6 +64,7 @@ import { resolveToolOutcome, outcomeFieldsFromResult } from '@/tools/intentArg';
+ import { snapshotValidatedModelChunk } from '@/graphs/acceptedModelResponse';
+ import { ProviderTextProtectionError } from '@/protection/providerText';
+ import { TOOL_OUTPUT_REF_PATTERN } from '@/tools/toolOutputReferences';
++import { READ_IMAGE_TOOL } from '@/tools/imageRead';
+ import { formatToolErrorContent } from '@/tools/toolErrorContent';
+ import { PreparedSubagentError } from '@/tools/preparedSubagents';
+ import { isReasoningContentBlock } from '@/messages/core';
+@@ -1841,6 +1842,7 @@ export class ChatModelStreamHandler implements t.EventHandler {
+     }
+     this.handleReasoning(chunk, agentContext);
+     const stepKey = graph.getStepKey(metadata);
++    const imageRead = 'imageRead' in graph ? graph.imageRead : undefined;
+     let hasToolCalls = false;
+     const hasToolCallChunks =
+       (chunk.tool_call_chunks && chunk.tool_call_chunks.length > 0) ?? false;
+@@ -1873,7 +1875,12 @@ export class ChatModelStreamHandler implements t.EventHandler {
+       )
+     ) {
+       hasToolCalls = true;
+-      await handleToolCalls(chunk.tool_calls, metadata, graph);
++      const visibleCalls = imageRead?.checkpointed
++        ? chunk.tool_calls.map((call) =>
++            call.name === READ_IMAGE_TOOL ? { ...call, args: {} } : call
++          )
++        : chunk.tool_calls;
++      await handleToolCalls(visibleCalls, metadata, graph);
+       if (runScopeInvalidated()) {
+         return;
+       }
+@@ -1958,7 +1965,9 @@ export class ChatModelStreamHandler implements t.EventHandler {
+       await handleToolCallChunks({
+         graph,
+         stepKey,
+-        toolCallChunks: chunk.tool_call_chunks,
++        toolCallChunks: imageRead?.checkpointed
++          ? imageRead.redactStreamedReadArgs(stepKey, chunk.tool_call_chunks)
++          : chunk.tool_call_chunks,
+         metadata,
+         observedAt,
+       });
 diff --git a/src/tools/ToolNode.ts b/src/tools/ToolNode.ts
-index 63521d0219d2035339e4309178890180ea17a628..823ead90f369ddf17918d7846fb8dd988f9bcd58 100644
+index 63521d0219d2035339e4309178890180ea17a628..a18d24171d1cb30fecde6ac266660283f17e3eb2 100644
 --- a/src/tools/ToolNode.ts
 +++ b/src/tools/ToolNode.ts
 @@ -1,6 +1,7 @@
@@ -417,7 +506,24 @@ index 63521d0219d2035339e4309178890180ea17a628..823ead90f369ddf17918d7846fb8dd98
    /** Run-scoped selection for swapping remote code tools to local executors. */
    private toolExecution?: t.ToolExecutionConfig;
    /** Owning graph's run-scoped breaker signal, composed into each batch's config. */
-@@ -1902,7 +1905,8 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+@@ -1769,6 +1772,16 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+         config
+       );
+     }
++    if (this.imageRead?.checkpointed && tool === this.imageRead.tool) {
++      // The provider schema still requires ref. The live model turn retained
++      // the validated selector before removing it from the checkpointed call.
++      return Promise.resolve(
++        this.imageRead.readCheckpointed(
++          runtime.state?.messages ?? [],
++          runtime.toolCallId
++        )
++      );
++    }
+     return tool.invoke(invokeParams, runtime);
+   }
+ 
+@@ -1902,7 +1915,8 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
        runInput,
      } = batchContext;
      const tool = this.toolMap.get(call.name);
@@ -427,7 +533,7 @@ index 63521d0219d2035339e4309178890180ea17a628..823ead90f369ddf17918d7846fb8dd98
      /**
       * Prefer the caller-provided snapshot when present — `run()`
       * captures one synchronously per batch so direct-path placeholder
-@@ -1919,7 +1923,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+@@ -1919,7 +1933,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
      const resolveOptions = {
        substituteIntentKey: this.toolDeclaresBusinessIntent(call.name),
      };
@@ -436,7 +542,7 @@ index 63521d0219d2035339e4309178890180ea17a628..823ead90f369ddf17918d7846fb8dd98
        resolveFn = <T>(_runId: string | undefined, args: T): ResolveResult<T> =>
          preBatchSnapshot.resolve(args, resolveOptions);
      } else if (registry != null) {
-@@ -2136,7 +2140,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+@@ -2136,7 +2150,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
            /** Error ToolMessages are never registered under a reference key. */
            return toolMsg;
          }
@@ -445,7 +551,7 @@ index 63521d0219d2035339e4309178890180ea17a628..823ead90f369ddf17918d7846fb8dd98
            if (typeof originalContent === 'string') {
              const rawContent = originalContent;
              const registryContent = stripCodeSessionFileSummary(rawContent);
-@@ -2161,7 +2165,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+@@ -2161,7 +2175,7 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
               */
              if (
                refKey != null &&
@@ -454,7 +560,7 @@ index 63521d0219d2035339e4309178890180ea17a628..823ead90f369ddf17918d7846fb8dd98
              ) {
                // eslint-disable-next-line no-console
                console.warn(
-@@ -2196,6 +2200,14 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+@@ -2196,6 +2210,14 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
        });
      } catch (_e: unknown) {
        const e = _e as Error;
@@ -469,7 +575,7 @@ index 63521d0219d2035339e4309178890180ea17a628..823ead90f369ddf17918d7846fb8dd98
        if (!this.handleToolErrors) {
          throw e;
        }
-@@ -4846,6 +4858,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
+@@ -4846,6 +4868,9 @@ export class ToolNode<T = any> extends RunnableCallable<T, T> {
                additional_kwargs: successRefMeta as Record<string, unknown>,
              }),
            });
@@ -481,10 +587,10 @@ index 63521d0219d2035339e4309178890180ea17a628..823ead90f369ddf17918d7846fb8dd98
          if (
 diff --git a/src/tools/__tests__/imageRead.test.ts b/src/tools/__tests__/imageRead.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..f7d638ea27c3e986cf50e3e2ff2f97ec21599711
+index 0000000000000000000000000000000000000000..2ca4b76994821a53316d6c6635153afe6da0bb7d
 --- /dev/null
 +++ b/src/tools/__tests__/imageRead.test.ts
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,392 @@
 +import {
 +  AIMessage,
 +  HumanMessage,
@@ -579,12 +685,14 @@ index 0000000000000000000000000000000000000000..f7d638ea27c3e986cf50e3e2ff2f97ec
 +  )) as ToolMessage;
 +}
 +
-+function setup() {
++function setup(checkpointed = false) {
 +  const a = result('a', first, second);
 +  const b = result('b', third);
 +  const source = request('mcp', 'a', 'b');
-+  const scope = new ToolImageRead((block, callId) =>
-+    callId === 'a' ? block === first || block === second : block === third
++  const scope = new ToolImageRead(
++    (block, callId) =>
++      callId === 'a' ? block === first || block === second : block === third,
++    checkpointed
 +  );
 +  scope.start();
 +  scope.accept(b);
@@ -683,6 +791,59 @@ index 0000000000000000000000000000000000000000..f7d638ea27c3e986cf50e3e2ff2f97ec
 +  ).toBe('image_omitted');
 +});
 +
++test('checkpointed reads take their selector from the live model message only', () => {
++  const { a, scope, state, refs } = setup(true);
++  const readCall = { id: 'read', name: 'read_image', args: { ref: refs[1] } };
++  const askCall = {
++    id: 'ask',
++    name: 'ask_user_question',
++    args: { question: 'Which one?' },
++  };
++  const calls = new AIMessage({
++    id: 'read-batch',
++    content: '',
++    tool_calls: [readCall, askCall],
++    response_metadata: {
++      output: [
++        {
++          type: 'function_call',
++          name: readCall.name,
++          arguments: JSON.stringify(readCall.args),
++        },
++      ],
++    },
++  });
++  scope.captureReadCalls(calls);
++  expect(JSON.stringify(calls).includes(refs[1])).toBe(false);
++  expect(calls.tool_calls).toEqual([{ ...readCall, args: {} }, askCall]);
++
++  const pending = [...state, calls];
++  const selected = scope.readCheckpointed(pending, readCall.id);
++  expect(selected.artifact == null).toBe(true);
++  expect(images(project(scope, [...pending, selected]))[0] === second).toBe(
++    true
++  );
++  const clonedParent = new AIMessage({
++    id: calls.id,
++    content: '',
++    tool_calls: [readCall, askCall],
++  });
++  expect(
++    scope.readCheckpointed([...state, clonedParent], readCall.id).content
++  ).toBe('invalid_ref');
++  const clonedSource = result('a', first, second);
++  expect(
++    scope.readCheckpointed(
++      pending.map((message) => (message === a ? clonedSource : message)),
++      readCall.id
++    ).content
++  ).toBe('image_unavailable');
++  scope.end();
++  expect(scope.readCheckpointed(pending, readCall.id).content).toBe(
++    'image_unavailable'
++  );
++});
++
 +test('rejects forged, removed, replaced and cross-scope sources', async () => {
 +  const { a, source, scope, state, refs } = setup();
 +  const otherScope = new ToolImageRead(() => true);
@@ -763,6 +924,8 @@ index 0000000000000000000000000000000000000000..f7d638ea27c3e986cf50e3e2ff2f97ec
 +  'eligible',
 +  'fallback',
 +  'checkpoint',
++  'allowed-checkpoint',
++  'tool-approval',
 +  'tracing',
 +  'continuation',
 +  'chat-completions',
@@ -777,6 +940,9 @@ index 0000000000000000000000000000000000000000..f7d638ea27c3e986cf50e3e2ff2f97ec
 +    const run = await Run.create({
 +      runId: 'synthetic-image-read-gates',
 +      isTrustedToolImage: () => true,
++      allowToolImageReadWithCheckpointer:
++        mode === 'allowed-checkpoint' || mode === 'tool-approval',
++      ...(mode === 'tool-approval' && { humanInTheLoop: { enabled: true } }),
 +      graphConfig: {
 +        type: 'standard',
 +        agents: [
@@ -801,13 +967,17 @@ index 0000000000000000000000000000000000000000..f7d638ea27c3e986cf50e3e2ff2f97ec
 +            },
 +          },
 +        ],
-+        ...(mode === 'checkpoint' && {
++        ...(['checkpoint', 'allowed-checkpoint', 'tool-approval'].includes(
++          mode
++        ) && {
 +          compileOptions: { checkpointer: new MemorySaver() },
 +        }),
 +      },
 +    });
 +    expect(run.Graph?.imageRead?.tool.name).toBe(
-+      mode === 'eligible' ? 'read_image' : undefined
++      mode === 'eligible' || mode === 'allowed-checkpoint'
++        ? 'read_image'
++        : undefined
 +    );
 +  } finally {
 +    jest.restoreAllMocks();
@@ -815,14 +985,15 @@ index 0000000000000000000000000000000000000000..f7d638ea27c3e986cf50e3e2ff2f97ec
 +});
 diff --git a/src/tools/imageRead.ts b/src/tools/imageRead.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..e79c78e0d85a73047c7ba20b18c61a41be9db611
+index 0000000000000000000000000000000000000000..dd52cd675ad1379d38ff36e9f84e9685c6b6429a
 --- /dev/null
 +++ b/src/tools/imageRead.ts
-@@ -0,0 +1,300 @@
+@@ -0,0 +1,405 @@
 +import { randomBytes } from 'node:crypto';
 +import { DynamicStructuredTool } from '@langchain/core/tools';
 +import {
 +  AIMessage,
++  AIMessageChunk,
 +  HumanMessage,
 +  ToolMessage,
 +  isHumanMessage,
@@ -832,6 +1003,7 @@ index 0000000000000000000000000000000000000000..e79c78e0d85a73047c7ba20b18c61a41
 +  MessageContentImageUrl,
 +} from '@langchain/core/messages';
 +import type { ToolRuntime } from '@langchain/core/tools';
++import type { ToolCallChunk } from '@langchain/core/messages/tool';
 +import type { BaseGraphState } from '@/types';
 +import type { ArtifactProjection } from '@/messages/core';
 +import {
@@ -877,12 +1049,27 @@ index 0000000000000000000000000000000000000000..e79c78e0d85a73047c7ba20b18c61a41
 +    : [];
 +}
 +
++function readRef(input: unknown): string | undefined {
++  const ref = (input as { ref?: unknown } | null | undefined)?.ref;
++  if (
++    typeof ref === 'string' &&
++    ref.length === 20 &&
++    refPattern.test(ref) &&
++    Object.keys(input as object).length === 1
++  ) {
++    return ref;
++  }
++}
++
 +/** Owned by the root graph. Only the canonical ToolMessage owns the image bytes. */
 +export class ToolImageRead {
 +  private active = false;
 +  private accepted = new WeakSet<ToolMessage>();
 +  private selections = new WeakMap<ToolMessage, Source>();
 +  private refs = new Map<string, Source>();
++  private readCalls = new WeakMap<AIMessage, Map<string, string | undefined>>();
++  private streamedStepKey?: string;
++  private streamedReadIndices = new Set<number>();
 +
 +  readonly tool = new DynamicStructuredTool<unknown>({
 +    name: READ_IMAGE_TOOL,
@@ -905,14 +1092,17 @@ index 0000000000000000000000000000000000000000..e79c78e0d85a73047c7ba20b18c61a41
 +      const runtime = config as ToolRuntime<Partial<BaseGraphState>>;
 +      runtime.signal?.throwIfAborted();
 +      return this.read(
-+        input,
++        readRef(input),
 +        runtime.state.messages ?? [],
 +        runtime.toolCallId
 +      );
 +    },
 +  });
 +
-+  constructor(private readonly isTrustedImage: IsTrustedToolImage) {}
++  constructor(
++    private readonly isTrustedImage: IsTrustedToolImage,
++    readonly checkpointed = false
++  ) {}
 +
 +  start(): void {
 +    this.end();
@@ -924,6 +1114,87 @@ index 0000000000000000000000000000000000000000..e79c78e0d85a73047c7ba20b18c61a41
 +    this.refs.clear();
 +    this.accepted = new WeakSet();
 +    this.selections = new WeakMap();
++    this.readCalls = new WeakMap();
++    this.streamedStepKey = undefined;
++    this.streamedReadIndices.clear();
++  }
++
++  /** Responses sends unnamed argument fragments after announcing a call by index. */
++  redactStreamedReadArgs(
++    stepKey: string,
++    chunks: ToolCallChunk[]
++  ): ToolCallChunk[] {
++    if (this.streamedStepKey !== stepKey) {
++      this.streamedStepKey = stepKey;
++      this.streamedReadIndices.clear();
++    }
++    return chunks.map((chunk) => {
++      const { index, name } = chunk;
++      if (index != null && name) {
++        if (name === READ_IMAGE_TOOL) this.streamedReadIndices.add(index);
++        else this.streamedReadIndices.delete(index);
++      }
++      return name === READ_IMAGE_TOOL ||
++        (index != null && this.streamedReadIndices.has(index))
++        ? { ...chunk, args: '' }
++        : chunk;
++    });
++  }
++
++  /** Keep selectors on the live model turn. The saver sees paired calls with empty args. */
++  captureReadCalls(message: AIMessage): void {
++    const calls = new Map<string, string | undefined>();
++    if (message.tool_calls?.some((call) => call.name === READ_IMAGE_TOOL)) {
++      message.tool_calls = message.tool_calls.map((call) => {
++        if (call.name !== READ_IMAGE_TOOL) return call;
++        if (call.id != null) calls.set(call.id, readRef(call.args));
++        return { ...call, args: {} };
++      });
++      message.lc_kwargs.tool_calls = message.tool_calls;
++      if (this.active) this.readCalls.set(message, calls);
++    }
++    if (
++      message instanceof AIMessageChunk &&
++      message.tool_call_chunks?.some(
++        (chunk) => chunk.name === READ_IMAGE_TOOL || calls.has(chunk.id ?? '')
++      )
++    ) {
++      message.tool_call_chunks = message.tool_call_chunks.map((chunk) =>
++        chunk.name === READ_IMAGE_TOOL || calls.has(chunk.id ?? '')
++          ? { ...chunk, args: '{}' }
++          : chunk
++      );
++      message.lc_kwargs.tool_call_chunks = message.tool_call_chunks;
++    }
++    if (
++      message.invalid_tool_calls?.some((call) => call.name === READ_IMAGE_TOOL)
++    ) {
++      message.invalid_tool_calls = message.invalid_tool_calls.map((call) =>
++        call.name === READ_IMAGE_TOOL
++          ? { ...call, args: '{}', error: 'invalid_ref' }
++          : call
++      );
++      message.lc_kwargs.invalid_tool_calls = message.invalid_tool_calls;
++    }
++    // The Responses adapter keeps the provider's completed function calls in metadata too.
++    const output = message.response_metadata.output;
++    if (
++      Array.isArray(output) &&
++      output.some(
++        (item) =>
++          item?.type === 'function_call' && item.name === READ_IMAGE_TOOL
++      )
++    ) {
++      message.response_metadata = {
++        ...message.response_metadata,
++        output: output.map((item) =>
++          item?.type === 'function_call' && item.name === READ_IMAGE_TOOL
++            ? { ...item, arguments: '{}' }
++            : item
++        ),
++      };
++      message.lc_kwargs.response_metadata = message.response_metadata;
++    }
 +  }
 +
 +  accept(message: ToolMessage): void {
@@ -957,21 +1228,25 @@ index 0000000000000000000000000000000000000000..e79c78e0d85a73047c7ba20b18c61a41
 +    }
 +  }
 +
++  readCheckpointed(messages: BaseMessage[], callId: string): ToolMessage {
++    const parent = messages.findLast((message) => message instanceof AIMessage);
++    const ref =
++      parent == null ? undefined : this.readCalls.get(parent)?.get(callId);
++    return this.read(ref, messages, callId);
++  }
++
 +  private read(
-+    input: unknown,
++    ref: string | undefined,
 +    messages: BaseMessage[],
 +    callId: string
 +  ): ToolMessage {
-+    const ref = (input as { ref?: unknown } | null | undefined)?.ref;
-+    const valid =
-+      typeof ref === 'string' &&
-+      ref.length === 20 &&
-+      refPattern.test(ref) &&
-+      Object.keys(input as object).length === 1;
-+    const source = valid && this.active ? this.refs.get(ref) : undefined;
++    const source = ref != null && this.active ? this.refs.get(ref) : undefined;
 +    const available =
 +      source?.exposed === true && this.sourceImage(messages, source) != null;
-+    let content = valid ? 'image_unavailable' : 'invalid_ref';
++    let content =
++      (this.checkpointed && !this.active) || ref != null
++        ? 'image_unavailable'
++        : 'invalid_ref';
 +    if (available) content = 'image_omitted';
 +    const result = new ToolMessage({
 +      name: READ_IMAGE_TOOL,
@@ -1120,15 +1395,17 @@ index 0000000000000000000000000000000000000000..e79c78e0d85a73047c7ba20b18c61a41
 +  }
 +}
 diff --git a/src/types/run.ts b/src/types/run.ts
-index 64f1892593edb8eb099d8169dc4955596057d589..e42a62e898921d441a94d0beff88cbfd0f7f2f55 100644
+index 64f1892593edb8eb099d8169dc4955596057d589..a2d7660d381c9d6b3d537fe521a783c1b0ec1841 100644
 --- a/src/types/run.ts
 +++ b/src/types/run.ts
-@@ -276,6 +276,8 @@ export interface StreamLimits {
+@@ -276,6 +276,10 @@ export interface StreamLimits {
  export type RunConfig = {
    runId: string;
    graphConfig: LegacyGraphConfig | StandardGraphConfig | MultiAgentGraphConfig;
 +  /** Attests an original inline image accepted by this run's host tool handler. */
 +  isTrustedToolImage?: (block: object, callId: string) => boolean;
++  /** Host opt-in when a fresh root run has a saver solely to support user questions. */
++  allowToolImageReadWithCheckpointer?: boolean;
    /**
     * Run-scoped Langfuse configuration. Per-agent `AgentInputs.langfuse`
     * takes precedence for agent-specific spans; this object supplies defaults
